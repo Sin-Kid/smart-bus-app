@@ -1,28 +1,26 @@
 // src/App.jsx
-import React from "react";
-import { Routes, Route } from "react-router-dom";
-import { ThemeProvider } from "./context/ThemeContext";
-import Sidebar from "./components/Sidebar";
-import Dashboard from "./pages/Dashboard";
-import StopsPage from "./pages/StopsPage";
-import RoutesPage from "./pages/RoutesPage";
-import LogsPage from "./pages/LogsPage";
-import "./styles.css"; 
+import React from 'react'
+import { Routes, Route } from 'react-router-dom'
+import Sidebar from './components/Sidebar'
+import Dashboard from './pages/Dashboard'
+import BusesPage from './pages/BusesPage'
+import RoutesPage from './pages/RoutesPage'
+import SchedulesPage from './pages/SchedulesPage'
+import StatusPage from './pages/StatusPage'
 
 export default function App() {
   return (
-    <ThemeProvider>
-      <div className="app-frame">
-        <Sidebar />
-        <main className="main-content">
-          <Routes>
-            <Route path="/" element={<Dashboard />} />
-            <Route path="/stops" element={<StopsPage />} />
-            <Route path="/routes" element={<RoutesPage />} />
-            <Route path="/logs" element={<LogsPage />} />
-          </Routes>
-        </main>
-      </div>
-    </ThemeProvider>
-  );
+    <div className="app-container">
+      <Sidebar />
+      <main className="main-content">
+        <Routes>
+          <Route path="/" element={<Dashboard />} />
+          <Route path="/buses" element={<BusesPage />} />
+          <Route path="/routes" element={<RoutesPage />} />
+          <Route path="/schedules" element={<SchedulesPage />} />
+          <Route path="/status" element={<StatusPage />} />
+        </Routes>
+      </main>
+    </div>
+  )
 }

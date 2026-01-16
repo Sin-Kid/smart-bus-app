@@ -1,21 +1,24 @@
-const functions = require('firebase-functions');
-const admin = require('firebase-admin');
+const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const cors = require('cors');
 
-// Initialize Firebase Admin SDK
-admin.initializeApp();
-const db = admin.firestore();
+// Initialize Supabase client
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+if (!supabaseUrl || !supabaseServiceKey) {
+  console.error('Missing Supabase Config! Ensure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set.');
+}
+const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
 // GeoPoint is no longer used. We rely on standard JavaScript Date objects for timestamps.
-const { FieldValue } = admin.firestore; 
 
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
 
-// Device token: prefer functions config, fallback to env var
-const DEVICE_TOKEN = (functions.config && functions.config().device && functions.config().device.token) || process.env.DEVICE_TOKEN || 'smart-bus';
+// Device token: prefer env var
+const DEVICE_TOKEN = process.env.DEVICE_TOKEN;
 console.log('>>> FUNCTIONS STARTUP DEVICE_TOKEN =', DEVICE_TOKEN);
 
 // Basic Haversine distance (km)
@@ -24,10 +27,10 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   const R = 6371; // km
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
-  const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
-            Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
-            Math.sin(dLon/2) * Math.sin(dLon/2);
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) *
+    Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
   return R * c;
 }
 
@@ -45,7 +48,7 @@ app.use((req, res, next) => {
 /**
  * POST /device/telemetry
  * body: { busId, lat, lon, speed?, heading?, timestamp? }
- * Writes to: /buses/{busId} (lastSeen, location), and a log in /telemetry/{autoid}
+ * Writes to: buses table (last_seen, location), and a log in telemetry table
  */
 app.post('/device/telemetry', async (req, res) => {
   try {
@@ -58,28 +61,50 @@ app.post('/device/telemetry', async (req, res) => {
     // Use standard Date objects for timestamps
     const ts = timestamp ? new Date(timestamp) : new Date();
 
-    const busRef = db.collection('buses').doc(busId);
+    // Update bus record
+    const { error: busUpdateError } = await supabase
+      .from('buses')
+      .update({
+        last_seen: ts.toISOString(),
+        location: { lat, lon },
+        speed: (typeof speed === 'number') ? speed : null,
+        heading: heading || null,
+      })
+      .eq('id', busId);
 
-    console.log('>>> ABOUT TO SET busRef', busId, 'ts=', ts, 'lat/lon=', lat, lon);
-    await busRef.set({
-      lastSeen: ts,
-      // Store location as a plain object { lat, lon }
-      location: { lat, lon }, 
-      speed: (typeof speed === 'number') ? speed : null,
-      heading: heading || null,
-    }, { merge: true });
-    console.log('>>> busRef.set OK');
+    if (busUpdateError) {
+      console.error('Error updating bus:', busUpdateError);
+      // If bus doesn't exist, create it
+      const { error: insertError } = await supabase
+        .from('buses')
+        .insert({
+          id: busId,
+          last_seen: ts.toISOString(),
+          location: { lat, lon },
+          speed: (typeof speed === 'number') ? speed : null,
+          heading: heading || null,
+        });
+      if (insertError) {
+        console.error('Error inserting bus:', insertError);
+        throw insertError;
+      }
+    }
 
-    console.log('>>> ABOUT TO ADD telemetry log');
-    await db.collection('telemetry').add({
-      busId,
-      // Store location as a plain object { lat, lon }
-      location: { lat, lon },
-      speed: (typeof speed === 'number') ? speed : null,
-      heading: heading || null,
-      timestamp: new Date(),
-    });
-    console.log('>>> telemetry.add OK');
+    // Add telemetry log
+    const { error: telemetryError } = await supabase
+      .from('telemetry')
+      .insert({
+        bus_id: busId,
+        location: { lat, lon },
+        speed: (typeof speed === 'number') ? speed : null,
+        heading: heading || null,
+        timestamp: ts.toISOString(),
+      });
+
+    if (telemetryError) {
+      console.error('Error inserting telemetry:', telemetryError);
+      throw telemetryError;
+    }
 
     return res.json({ ok: true });
   } catch (err) {
@@ -107,68 +132,94 @@ app.post('/device/rfid', async (req, res) => {
 
     if (eventType === 'entry') {
       // create trip
-      const tripRef = db.collection('trips').doc();
       const tripData = {
-        busId,
-        cardId,
-        startTime: ts, // Store as Date
-        // Store location as a plain object { lat, lon }
-        startLocation: (typeof lat === 'number' && typeof lon === 'number') 
+        bus_id: busId,
+        card_id: cardId,
+        start_time: ts.toISOString(),
+        start_location: (typeof lat === 'number' && typeof lon === 'number')
           ? { lat, lon }
           : null,
-        endTime: null,
-        endLocation: null,
+        end_time: null,
+        end_location: null,
         fare: null,
         status: 'ongoing',
       };
-      await tripRef.set(tripData);
 
-      // set user/card activeTrip pointer
-      const cardRef = db.collection('cards').doc(cardId);
-      await cardRef.set({ 
-        activeTrip: tripRef.id, 
-        lastSeen: new Date() 
-      }, { merge: true });
+      const { data: trip, error: tripError } = await supabase
+        .from('trips')
+        .insert(tripData)
+        .select()
+        .single();
+
+      if (tripError) throw tripError;
+
+      // set card active_trip pointer
+      const { error: cardUpdateError } = await supabase
+        .from('cards')
+        .update({
+          active_trip: trip.id,
+          last_seen: ts.toISOString(),
+          updated_at: ts.toISOString(),
+        })
+        .eq('id', cardId);
+
+      if (cardUpdateError) {
+        console.error('Error updating card:', cardUpdateError);
+        // Card might not exist, create it
+        await supabase
+          .from('cards')
+          .insert({
+            id: cardId,
+            active_trip: trip.id,
+            last_seen: ts.toISOString(),
+            created_at: ts.toISOString(),
+            updated_at: ts.toISOString(),
+          });
+      }
 
       // log event
-      await db.collection('rfidLogs').add({ 
-        busId, 
-        cardId, 
-        eventType: 'entry', 
-        timestamp: new Date() 
-      });
+      await supabase
+        .from('rfid_logs')
+        .insert({
+          bus_id: busId,
+          card_id: cardId,
+          event_type: 'entry',
+          timestamp: ts.toISOString(),
+        });
 
-      return res.json({ ok: true, tripId: tripRef.id });
+      return res.json({ ok: true, tripId: trip.id });
     }
 
     if (eventType === 'exit') {
       // find active trip
-      const tripsQ = await db.collection('trips')
-        .where('cardId', '==', cardId)
-        .where('status', '==', 'ongoing')
-        .orderBy('startTime', 'desc')
-        .limit(1)
-        .get();
+      const { data: trips, error: tripsError } = await supabase
+        .from('trips')
+        .select('*')
+        .eq('card_id', cardId)
+        .eq('status', 'ongoing')
+        .order('start_time', { ascending: false })
+        .limit(1);
 
-      if (tripsQ.empty) {
+      if (tripsError) throw tripsError;
+
+      if (!trips || trips.length === 0) {
         return res.status(404).json({ error: 'No ongoing trip found for card' });
       }
 
-      const tripDoc = tripsQ.docs[0];
-      const trip = tripDoc.data();
+      const trip = trips[0];
 
-      const endLoc = (typeof lat === 'number' && typeof lon === 'number') 
-        ? { lat, lon } 
+      const endLoc = (typeof lat === 'number' && typeof lon === 'number')
+        ? { lat, lon }
         : null;
 
       // compute distance if startLocation exists
       let distanceKm = null;
-      if (trip.startLocation && endLoc) {
+      if (trip.start_location && endLoc) {
         // Access coordinates using .lat and .lon (plain object keys)
         distanceKm = haversineKm(
-          trip.startLocation.lat, 
-          trip.startLocation.lon, 
-          endLoc.lat, 
+          trip.start_location.lat,
+          trip.start_location.lon,
+          endLoc.lat,
           endLoc.lon
         );
       }
@@ -185,41 +236,54 @@ app.post('/device/rfid', async (req, res) => {
       }
 
       // update trip
-      await tripDoc.ref.update({
-        endTime: ts, // Store as Date
-        // Store end location as the plain object { lat, lon }
-        endLocation: endLoc ? endLoc : null,
-        distanceKm: distanceKm,
-        fare,
-        status: 'finished',
-      });
+      const { error: updateError } = await supabase
+        .from('trips')
+        .update({
+          end_time: ts.toISOString(),
+          end_location: endLoc ? endLoc : null,
+          distance_km: distanceKm,
+          fare,
+          status: 'finished',
+        })
+        .eq('id', trip.id);
 
-      // clear card activeTrip
-      const cardRef = db.collection('cards').doc(cardId);
-      await cardRef.set({ 
-        activeTrip: null, 
-        lastSeen: new Date() 
-      }, { merge: true });
+      if (updateError) throw updateError;
+
+      // clear card active_trip
+      await supabase
+        .from('cards')
+        .update({
+          active_trip: null,
+          last_seen: ts.toISOString(),
+          updated_at: ts.toISOString(),
+        })
+        .eq('id', cardId);
 
       // create transaction
-      const txRef = db.collection('transactions').doc();
-      await txRef.set({
-        cardId,
-        tripId: tripDoc.id,
-        amount: fare,
-        timestamp: ts, // Store as Date
-        busId,
-      });
+      const { error: txError } = await supabase
+        .from('transactions')
+        .insert({
+          card_id: cardId,
+          trip_id: trip.id,
+          amount: fare,
+          timestamp: ts.toISOString(),
+          bus_id: busId,
+          type: 'trip',
+        });
+
+      if (txError) throw txError;
 
       // log rfid
-      await db.collection('rfidLogs').add({ 
-        busId, 
-        cardId, 
-        eventType: 'exit', 
-        timestamp: new Date() 
-      });
+      await supabase
+        .from('rfid_logs')
+        .insert({
+          bus_id: busId,
+          card_id: cardId,
+          event_type: 'exit',
+          timestamp: ts.toISOString(),
+        });
 
-      return res.json({ ok: true, tripId: tripDoc.id, fare });
+      return res.json({ ok: true, tripId: trip.id, fare });
     }
 
     return res.status(400).json({ error: 'invalid eventType' });
@@ -230,6 +294,14 @@ app.post('/device/rfid', async (req, res) => {
 });
 
 // default healthcheck
-app.get('/', (req, res) => res.send('SmartBus functions OK'));
+app.get('/', (req, res) => res.send('SmartBus API OK'));
 
-exports.api = functions.https.onRequest(app);
+// Export for use with serverless platforms or Express server
+const PORT = process.env.PORT || 3000;
+if (require.main === module) {
+  app.listen(PORT, () => {
+    console.log(`SmartBus API server running on port ${PORT}`);
+  });
+}
+
+module.exports = app;

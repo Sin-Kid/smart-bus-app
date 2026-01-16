@@ -1,68 +1,66 @@
 // src/pages/Dashboard.jsx
-import React from "react";
+import React, { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
+import { supabase } from "../supabaseConfig";
 
 export default function Dashboard() {
+  const [stats, setStats] = useState({ buses: 0, routes: 0, stops: 0, schedules: 0 });
+
+  useEffect(() => {
+    async function loadStats() {
+      const { count: cBuses } = await supabase.from("buses").select("*", { count: "exact", head: true });
+      const { count: cRoutes } = await supabase.from("bus_routes").select("*", { count: "exact", head: true });
+      const { count: cStops } = await supabase.from("bus_stops").select("*", { count: "exact", head: true });
+      const { count: cSchedules } = await supabase.from("bus_schedules").select("*", { count: "exact", head: true });
+
+      setStats({
+        buses: cBuses || 0,
+        routes: cRoutes || 0,
+        stops: cStops || 0,
+        schedules: cSchedules || 0
+      });
+    }
+    loadStats();
+  }, []);
+
   return (
-    <div className="dashboard-grid">
+    <div className="page-container">
+      <div className="page-header">
+        <h2>Dashboard</h2>
+        <p className="page-subtitle">Overview of your transit system.</p>
+      </div>
 
-      {/* HERO SECTION */}
-      <section className="panel hero panel-hero">
-        <div className="hero-left">
-          <h2>Welcome Admin</h2>
-          <p className="muted">
-            Manage stops, routes, and monitor logs in real time.
-          </p>
-
-          <div className="hero-actions">
-            <Link to="/stops" className="btn">Manage Stops</Link>
-            <Link to="/routes" className="btn secondary">Manage Routes</Link>
-            <Link to="/logs" className="btn secondary">View Logs</Link>
-          </div>
+      <div className="stats-grid">
+        <div className="card">
+          <h3>Buses</h3>
+          <p className="stat-value">{stats.buses}</p>
+          <Link to="/buses" className="btn-small">Manage</Link>
         </div>
-
-        {/* Right side kept clean for now */}
-        <div className="hero-right clean-stats">
-          <div className="stat clean">
-            <div className="stat-value">—</div>
-            <div className="stat-label">Active buses</div>
-          </div>
-          <div className="stat clean">
-            <div className="stat-value">—</div>
-            <div className="stat-label">Telemetry</div>
-          </div>
-          <div className="stat clean">
-            <div className="stat-value">—</div>
-            <div className="stat-label">Routes</div>
-          </div>
+        <div className="card">
+          <h3>Routes</h3>
+          <p className="stat-value">{stats.routes}</p>
+          <Link to="/routes" className="btn-small">Manage</Link>
         </div>
-      </section>
+        <div className="card">
+          <h3>Stops</h3>
+          <p className="stat-value">{stats.stops}</p>
+          <Link to="/routes" className="btn-small">Manage</Link>
+        </div>
+        <div className="card">
+          <h3>Schedules</h3>
+          <p className="stat-value">{stats.schedules}</p>
+          <Link to="/schedules" className="btn-small">Manage</Link>
+        </div>
+      </div>
 
-      {/* EMPTY SECTIONS (WAITING FOR REAL DATA) */}
-
-      <section className="panel grid-card">
-        <h3>Recent Alerts</h3>
-        <p className="muted" style={{ marginTop: 6 }}>
-          No alerts available. System will display alerts here once generated.
-        </p>
-      </section>
-
-      <section className="panel grid-card">
+      <div className="section">
         <h3>Quick Links</h3>
         <div className="quick-links">
-          <Link className="quick" to="/stops">Edit Stops</Link>
-          <Link className="quick" to="/routes">Edit Routes</Link>
-          <Link className="quick" to="/logs">Open Logs</Link>
+          <Link to="/status" className="btn-primary">View Live Status</Link>
+          <Link to="/buses" className="btn-secondary">Add New Bus</Link>
+          <Link to="/routes" className="btn-secondary">Add New Route</Link>
         </div>
-      </section>
-
-      <section className="panel grid-card">
-        <h3>System</h3>
-        <p className="muted" style={{ marginTop: 6 }}>
-          System metrics will appear here when backend integrations are added.
-        </p>
-      </section>
-
+      </div>
     </div>
   );
 }

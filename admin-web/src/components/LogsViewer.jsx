@@ -1,20 +1,11 @@
 // src/components/LogsViewer.jsx
 import React, { useEffect, useState, useRef } from 'react';
-import {
-  collection,
-  query,
-  orderBy,
-  limit,
-  onSnapshot,
-  where
-} from 'firebase/firestore';
-import { db } from '../firebaseConfig';
+import { supabase } from '../supabaseConfig';
 
 // Utility: format timestamp if present
 function fmtTs(t) {
   if (!t) return '-';
   try {
-    if (t.toDate) return t.toDate().toLocaleString();
     return new Date(t).toLocaleString();
   } catch (e) {
     return String(t);
@@ -33,36 +24,50 @@ export default function LogsViewer() {
     setLogs([]); // reset when filters change
     if (paused) return; // no subscription when paused
 
-    // NOTE: change 'telemetry' to your actual telemetry collection path if different
-    const colRef = collection(db, 'telemetry');
-    let q;
+    const fetchLogs = async () => {
+      let query = supabase
+        .from('telemetry')
+        .select('*')
+        .order('timestamp', { ascending: false })
+        .limit(limitCount);
 
-    // base query: newest first
-    q = query(colRef, orderBy('ts', 'desc'), limit(limitCount));
+      // apply bus filter if present
+      if (busFilter && busFilter.trim()) {
+        query = query.eq('bus_id', busFilter.trim());
+      }
 
-    // apply bus filter if present
-    if (busFilter && busFilter.trim()) {
-      // use where('busId', '==', busFilter) and then order/limit
-      q = query(colRef, where('busId', '==', busFilter.trim()), orderBy('ts', 'desc'), limit(limitCount));
-    }
-
-    const unsub = onSnapshot(q, (snap) => {
-      const arr = [];
-      snap.forEach((d) => arr.push({ id: d.id, ...d.data() }));
-      // snap comes in descending ts (we used orderBy desc); keep that
-      setLogs(arr);
-      // auto-scroll to top where newest items are (because desc)
+      const { data, error } = await query;
+      if (error) {
+        console.error('Logs fetch error:', error);
+        return;
+      }
+      setLogs(data || []);
+      // auto-scroll to top where newest items are
       if (listRef.current) {
-        // small timeout to allow render
         setTimeout(() => {
           listRef.current.scrollTop = 0;
         }, 50);
       }
-    }, (err) => {
-      console.error('Logs subscription error:', err);
-    });
+    };
 
-    return () => unsub();
+    fetchLogs();
+
+    if (!paused) {
+      const subscription = supabase
+        .channel('telemetry_changes')
+        .on('postgres_changes', {
+          event: '*',
+          schema: 'public',
+          table: 'telemetry'
+        }, () => {
+          fetchLogs();
+        })
+        .subscribe();
+
+      return () => {
+        subscription.unsubscribe();
+      };
+    }
   }, [busFilter, limitCount, paused]);
 
   return (
@@ -118,8 +123,8 @@ export default function LogsViewer() {
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
                 <div>
-                  <strong style={{ color: '#0b5cff' }}>{l.busId || '—'}</strong>
-                  <span style={{ marginLeft: 8, color: '#666' }}>{fmtTs(l.ts)}</span>
+                  <strong style={{ color: '#0b5cff' }}>{l.bus_id || '—'}</strong>
+                  <span style={{ marginLeft: 8, color: '#666' }}>{fmtTs(l.timestamp)}</span>
                 </div>
                 <div style={{ color: '#333' }}>
                   <span style={{ marginRight: 12 }}>speed: <strong>{l.speed ?? '-'}</strong></span>
@@ -128,7 +133,7 @@ export default function LogsViewer() {
 
               <div style={{ marginTop: 6 }}>
                 <small style={{ color: '#444' }}>
-                  lat: {l.lat ?? '-'}, lon: {l.lon ?? '-'}
+                  lat: {l.location?.lat ?? l.lat ?? '-'}, lon: {l.location?.lon ?? l.lon ?? '-'}
                 </small>
               </div>
 
