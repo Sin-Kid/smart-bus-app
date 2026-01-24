@@ -1,6 +1,10 @@
 // src/pages/StatusPage.jsx
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../supabaseConfig'
+import MLPredictionPanel from '../components/MLPredictionPanel'
+import PassengerFrequencyChart from '../components/PassengerFrequencyChart'
+import RoutePassengerChart from '../components/RoutePassengerChart'
+
 
 export default function StatusPage() {
   const [activeBuses, setActiveBuses] = useState([])
@@ -46,6 +50,9 @@ export default function StatusPage() {
   const [totalSeats, setTotalSeats] = useState(40)
   const [selectedStopId, setSelectedStopId] = useState('')
   const [selectedStopName, setSelectedStopName] = useState('')
+  // RFID Simulation State
+  const [rfidCardId, setRfidCardId] = useState('596B7E05')
+  const [rfidProcessing, setRfidProcessing] = useState(false)
 
   const fetchBusRoute = async (busId) => {
     if (!busId) {
@@ -98,37 +105,173 @@ export default function StatusPage() {
       let stopId = selectedStopId
       let stopName = ''
 
-      // Resolve Name
+      // Resolve Name and GPS Coordinates
+      let stopLat = null
+      let stopLon = null
+
       if (stopId === 'source-node') stopName = currentRouteInfo?.source
       else if (stopId === 'dest-node') stopName = currentRouteInfo?.destination
       else {
         const s = currentRouteStops.find(s => s.id === stopId)
-        if (s) stopName = s.name
+        if (s) {
+          stopName = s.name
+          stopLat = s.lat
+          stopLon = s.lon
+        }
       }
 
       // If no stop selected, maybe just update text? Assume stop selected for now or handle empty
       const statusMsg = stopName ? `At ${stopName}` : (currentBusStatus?.status_message || 'On Time')
 
+      // Build update object with GPS location if available
+      const updateData = {
+        current_stop_id: stopId === 'source-node' || stopId === 'dest-node' ? null : stopId,
+        current_location_name: stopName || null,
+        status_message: statusMsg,
+        sim_occupied: simOccupied,
+        sim_leaving: simLeaving,
+        capacity: totalSeats,
+        updated_at: new Date()
+      }
+
+      // *** NEW: Update GPS location JSONB for RFID simulation ***
+      if (stopLat !== null && stopLon !== null) {
+        updateData.location = { lat: stopLat, lon: stopLon }
+      }
+
       await supabase
         .from('buses')
-        .update({
-          current_stop_id: stopId === 'source-node' || stopId === 'dest-node' ? null : stopId,
-          status_message: statusMsg,
-          sim_occupied: simOccupied,
-          sim_leaving: simLeaving,
-          capacity: totalSeats,
-          updated_at: new Date()
-        })
+        .update(updateData)
         .eq('id', selectedBusId)
+
+      /* --- BACKFILL FIX FOR START LOCATION: DISABLED TO PREVENT OVERWRITING STATIC SOURCE ---
+      // We rely on the backend (functions/index.js) capturing the correct location at scan time.
+      if (stopName) {
+        // Code removed to prevent dynamic updates of start source
+      }
+      */
+
+      // Fix "Unknown End" for recently finished trips (Simulation Testing Support)
+      if (stopName) {
+        // --- NEW: Also fix "Unknown End" for recently finished trips (Simulation Testing Support) ---
+        // 1. Check for NULL end (update last 5 to catch recent tests)
+        const { data: recentFinishedNull } = await supabase
+          .from('trips')
+          .select('id')
+          .eq('bus_id', selectedBusId)
+          .eq('status', 'finished')
+          .is('end_stop_name', null)
+          .order('end_time', { ascending: false })
+          .limit(5)
+
+        if (recentFinishedNull && recentFinishedNull.length > 0) {
+          const ids = recentFinishedNull.map(t => t.id)
+          await supabase.from('trips').update({ end_stop_name: stopName }).in('id', ids)
+          console.log(`Backfilled ${ids.length} entries of Last Finished Trips (NULL End) with: ${stopName}`)
+        }
+
+        // 2. Check for "Unknown End" string (Fallback)
+        const { data: recentFinishedUnknown } = await supabase
+          .from('trips')
+          .select('id')
+          .eq('bus_id', selectedBusId)
+          .eq('status', 'finished')
+          .eq('end_stop_name', 'Unknown End')
+          .order('end_time', { ascending: false })
+          .limit(5)
+
+        if (recentFinishedUnknown && recentFinishedUnknown.length > 0) {
+          const ids = recentFinishedUnknown.map(t => t.id)
+          await supabase.from('trips').update({ end_stop_name: stopName }).in('id', ids)
+          console.log(`Backfilled ${ids.length} entries of Last Finished Trips ('Unknown End') with: ${stopName}`)
+        }
+        // ------------------------------------------------------------------------------------------
+      }
+      // ----------------------------------------------------------------
 
       // Refresh local state
       fetchBusRoute(selectedBusId)
-      alert('Simulation Updated!')
+      alert(`Simulation Updated! Location set to: ${stopName || 'GSP Coordinates'}`)
     } catch (err) {
       console.error(err)
-      alert('Error updating location')
+      alert('Error updating location: ' + err.message)
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // RFID Simulation Handlers
+  const handleRfidEntry = async () => {
+    if (!rfidCardId || !selectedBusId) {
+      alert('Please select a bus and enter a card ID')
+      return
+    }
+
+    setRfidProcessing(true)
+    try {
+      // Get current bus location for GPS coordinates
+      const { data: bus } = await supabase.from('buses').select('location').eq('id', selectedBusId).single()
+      const lat = bus?.location?.lat || 0
+      const lon = bus?.location?.lon || 0
+
+      // Call the RPC function
+      const { data, error } = await supabase.rpc('handle_bus_entry', {
+        p_card_uid: rfidCardId,
+        p_bus_id: selectedBusId,
+        p_lat: lat,
+        p_lon: lon
+      })
+
+      if (error) throw error
+
+      if (data.status === 'success') {
+        alert(`✅ ${data.message}\n\nSource: ${data.source || 'Unknown Location'}\nBalance: ₹${data.balance}`)
+        fetchBusRoute(selectedBusId) // Refresh
+      } else {
+        alert(`❌ ${data.message}`)
+      }
+    } catch (err) {
+      console.error(err)
+      alert('Error simulating entry: ' + err.message)
+    } finally {
+      setRfidProcessing(false)
+    }
+  }
+
+  const handleRfidExit = async () => {
+    if (!rfidCardId || !selectedBusId) {
+      alert('Please select a bus and enter a card ID')
+      return
+    }
+
+    setRfidProcessing(true)
+    try {
+      // Get current bus location for GPS coordinates
+      const { data: bus } = await supabase.from('buses').select('location').eq('id', selectedBusId).single()
+      const lat = bus?.location?.lat || 0
+      const lon = bus?.location?.lon || 0
+
+      // Call the RPC function
+      const { data, error } = await supabase.rpc('handle_bus_exit', {
+        p_card_uid: rfidCardId,
+        p_bus_id: selectedBusId,
+        p_lat: lat,
+        p_lon: lon
+      })
+
+      if (error) throw error
+
+      if (data.status === 'success') {
+        alert(`✅ ${data.message}\n\nDestination: ${data.destination || 'Unknown Location'}\nFare: ₹${data.deducted}\nBalance: ₹${data.balance}`)
+        fetchBusRoute(selectedBusId) // Refresh
+      } else {
+        alert(`❌ ${data.message}`)
+      }
+    } catch (err) {
+      console.error(err)
+      alert('Error simulating exit: ' + err.message)
+    } finally {
+      setRfidProcessing(false)
     }
   }
 
@@ -291,6 +434,110 @@ export default function StatusPage() {
                 <p style={{ fontSize: '12px', color: '#64748b', textAlign: 'center', margin: 0 }}>
                   Changes reflect immediately in the user app.
                 </p>
+
+                {/* RFID Simulation Section */}
+                <div style={{
+                  marginTop: '24px',
+                  padding: '20px',
+                  background: 'linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)',
+                  borderRadius: '8px',
+                  border: '2px solid #fbbf24'
+                }}>
+                  <h4 style={{
+                    margin: '0 0 12px 0',
+                    fontSize: '15px',
+                    fontWeight: '700',
+                    color: '#92400e',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
+                  }}>
+                    🎫 RFID Scan Simulation
+                  </h4>
+
+                  <div className="form-group" style={{ marginBottom: '12px' }}>
+                    <label style={{ fontSize: '13px', color: '#78350f', fontWeight: '600' }}>Card ID / UID</label>
+                    <input
+                      type="text"
+                      value={rfidCardId}
+                      onChange={(e) => setRfidCardId(e.target.value)}
+                      placeholder="e.g., 596B7E05"
+                      style={{
+                        width: '100%',
+                        padding: '10px 12px',
+                        borderRadius: '6px',
+                        border: '1px solid #fbbf24',
+                        fontSize: '14px',
+                        backgroundColor: 'white',
+                        fontFamily: 'monospace'
+                      }}
+                    />
+                  </div>
+
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px' }}>
+                    <button
+                      onClick={handleRfidEntry}
+                      disabled={rfidProcessing}
+                      style={{
+                        padding: '12px',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        borderRadius: '6px',
+                        backgroundColor: rfidProcessing ? '#d1d5db' : '#10b981',
+                        color: 'white',
+                        border: 'none',
+                        cursor: rfidProcessing ? 'not-allowed' : 'pointer',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {rfidProcessing ? '⏳ Processing...' : '🚪 Scan Entry'}
+                    </button>
+
+                    <button
+                      onClick={handleRfidExit}
+                      disabled={rfidProcessing}
+                      style={{
+                        padding: '12px',
+                        fontSize: '14px',
+                        fontWeight: '600',
+                        borderRadius: '6px',
+                        backgroundColor: rfidProcessing ? '#d1d5db' : '#ef4444',
+                        color: 'white',
+                        border: 'none',
+                        cursor: rfidProcessing ? 'not-allowed' : 'pointer',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {rfidProcessing ? '⏳ Processing...' : '🚪 Scan Exit'}
+                    </button>
+                  </div>
+
+                  <p style={{
+                    fontSize: '11px',
+                    color: '#78350f',
+                    marginTop: '12px',
+                    marginBottom: 0,
+                    lineHeight: '1.4'
+                  }}>
+                    💡 <strong>Tip:</strong> Set bus location first, then simulate RFID scans. The source/destination will be automatically resolved from GPS coordinates.
+                  </p>
+                </div>
+
+                {/* ML Prediction Panel */}
+                <MLPredictionPanel
+                  busId={selectedBusId}
+                  currentStopId={selectedStopId}
+                  currentOccupancy={simOccupied}
+                  stops={currentRouteStops}
+                />
+
+                {/* Passenger Frequency Chart */}
+                <PassengerFrequencyChart busId={selectedBusId} />
+
+                {/* Route Passenger Distribution Chart */}
+                <RoutePassengerChart />
 
               </div>
             )}

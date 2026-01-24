@@ -23,6 +23,25 @@ export default function BusRouteScreen({ navigation, route }) {
 
     useEffect(() => {
         fetchRouteDetails();
+
+        // REALTIME SUBSCRIPTION
+        // Listen for changes in 'buses' (occupancy/location) AND 'bus_schedules' (status)
+        const sub = supabase.channel('bus_live_updates')
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'buses' }, (payload) => {
+                console.log('Realtime Bus Update:', payload);
+                if (payload.new && payload.new.id === busId) {
+                    fetchRouteDetails(); // Refresh all data if our bus changed
+                }
+            })
+            .on('postgres_changes', { event: '*', schema: 'public', table: 'telemetry' }, () => {
+                // Optional: Telemetry updates mostly affect location, we can refresh too
+                fetchRouteDetails();
+            })
+            .subscribe();
+
+        return () => {
+            supabase.removeChannel(sub);
+        };
     }, [scheduleId]);
 
     const fetchRouteDetails = async () => {

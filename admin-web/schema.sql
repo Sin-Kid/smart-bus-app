@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS buses (
 -- Simulation & Status Columns
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS status_message TEXT DEFAULT 'On Time';
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS current_stop_id UUID; -- FK reference added later if needed
+ALTER TABLE buses ADD COLUMN IF NOT EXISTS current_location_name TEXT;
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS capacity INTEGER DEFAULT 40;
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS sim_occupied INTEGER DEFAULT 28;
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS sim_leaving INTEGER DEFAULT 5;
@@ -55,6 +56,7 @@ CREATE TABLE IF NOT EXISTS bus_stops (
 ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS code TEXT;
 ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS route_id UUID REFERENCES bus_routes(id) ON DELETE CASCADE;
 ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS arrival_time TEXT; -- Format: HH:MM AM/PM
+ALTER TABLE bus_stops ADD COLUMN IF NOT EXISTS price NUMERIC DEFAULT 10;
 
 -- 1.4 BUS SCHEDULES
 CREATE TABLE IF NOT EXISTS bus_schedules (
@@ -91,7 +93,7 @@ ALTER TABLE cards ADD COLUMN IF NOT EXISTS active_trip UUID; -- FK to trips adde
 -- 1.6 TRIPS
 CREATE TABLE IF NOT EXISTS trips (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bus_id TEXT NOT NULL REFERENCES buses(id),
+  bus_id TEXT NOT NULL REFERENCES buses(id) ON DELETE CASCADE,
   card_id TEXT NOT NULL REFERENCES cards(id),
   start_time TIMESTAMPTZ NOT NULL,
   start_location JSONB,
@@ -99,7 +101,9 @@ CREATE TABLE IF NOT EXISTS trips (
   end_location JSONB,
   distance_km NUMERIC,
   fare NUMERIC,
-  status TEXT NOT NULL DEFAULT 'ongoing'
+  status TEXT NOT NULL DEFAULT 'ongoing',
+  start_stop_name TEXT,
+  end_stop_name TEXT
 );
 
 -- Linking active_trip FK safely
@@ -131,7 +135,7 @@ CREATE TABLE IF NOT EXISTS transactions (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   card_id TEXT NOT NULL REFERENCES cards(id),
   trip_id UUID REFERENCES trips(id),
-  bus_id TEXT REFERENCES buses(id),
+  bus_id TEXT REFERENCES buses(id) ON DELETE CASCADE,
   type TEXT NOT NULL, -- 'trip' | 'recharge'
   amount NUMERIC NOT NULL,
   timestamp TIMESTAMPTZ DEFAULT NOW(),
@@ -142,7 +146,7 @@ CREATE TABLE IF NOT EXISTS transactions (
 -- 1.9 RFID LOGS
 CREATE TABLE IF NOT EXISTS rfid_logs (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  bus_id TEXT NOT NULL REFERENCES buses(id),
+  bus_id TEXT NOT NULL REFERENCES buses(id) ON DELETE CASCADE,
   card_id TEXT NOT NULL REFERENCES cards(id),
   event_type TEXT NOT NULL, -- 'entry' | 'exit'
   timestamp TIMESTAMPTZ DEFAULT NOW()
@@ -177,6 +181,30 @@ ALTER TABLE rfid_logs DISABLE ROW LEVEL SECURITY;
 -- 3. HARDWARE LOGIC (RPC FUNCTIONS)
 -- =====================================================
 
+-- 3.0 HELPER: RESOLVE GPS TO STOP NAME
+-- Returns the admin-set location name for simulation
+-- This is the authoritative source for trip source/destination
+CREATE OR REPLACE FUNCTION resolve_stop_name(
+    p_bus_id TEXT,
+    p_lat NUMERIC,
+    p_lon NUMERIC
+)
+RETURNS TEXT AS $$
+DECLARE
+    v_bus_location_name TEXT;
+BEGIN
+    -- Get admin-set location name (Simulation Mode)
+    SELECT current_location_name INTO v_bus_location_name 
+    FROM buses 
+    WHERE id = p_bus_id;
+    
+    -- Return admin-set location or NULL
+    RETURN v_bus_location_name;
+END;
+
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
 -- 3.1 HANDLE BUS ENTRY
 CREATE OR REPLACE FUNCTION handle_bus_entry(
     p_card_uid TEXT,
@@ -188,6 +216,7 @@ RETURNS JSONB AS $$
 DECLARE
     v_card_record RECORD;
     v_trip_id UUID;
+    v_start_stop_name TEXT;
 BEGIN
     -- Match by ID or Card Number
     SELECT * INTO v_card_record FROM cards WHERE id = p_card_uid OR card_number = p_card_uid LIMIT 1;
@@ -196,14 +225,22 @@ BEGIN
         RETURN jsonb_build_object('status', 'error', 'message', 'Card not registered');
     END IF;
 
-    -- Check Balance (Min ₹20)
-    IF v_card_record.balance < 20 THEN
-         RETURN jsonb_build_object('status', 'error', 'message', 'Insufficient Balance', 'balance', v_card_record.balance);
+    -- Check Balance (Min ₹50 to ensure they can pay at exit)
+    IF v_card_record.balance < 50 THEN
+         RETURN jsonb_build_object('status', 'error', 'message', 'Insufficient Balance (Need ₹50)', 'balance', v_card_record.balance);
     END IF;
 
-    -- Start Trip
-    INSERT INTO trips (bus_id, card_id, start_time, start_location, status, fare)
-    VALUES (p_bus_id, v_card_record.id, NOW(), jsonb_build_object('lat', p_lat, 'lon', p_lon), 'ongoing', 0)
+    -- Check for Existing Active Trip (Prevents Double Entry)
+    IF v_card_record.active_trip IS NOT NULL THEN
+         RETURN jsonb_build_object('status', 'error', 'message', 'Already on a trip!');
+    END IF;
+
+    -- *** NEW: Resolve GPS to Stop Name ***
+    v_start_stop_name := resolve_stop_name(p_bus_id, p_lat, p_lon);
+
+    -- Start Trip with resolved stop name
+    INSERT INTO trips (bus_id, card_id, start_time, start_location, start_stop_name, status, fare)
+    VALUES (p_bus_id, v_card_record.id, NOW(), jsonb_build_object('lat', p_lat, 'lon', p_lon), v_start_stop_name, 'ongoing', 0)
     RETURNING id INTO v_trip_id;
 
     -- Update Card Active Trip
@@ -212,9 +249,22 @@ BEGIN
     -- Log
     INSERT INTO rfid_logs (bus_id, card_id, event_type) VALUES (p_bus_id, v_card_record.id, 'entry');
 
-    RETURN jsonb_build_object('status', 'success', 'message', 'Welcome Aboard', 'balance', v_card_record.balance);
+    -- SYNC SIMULATION: Increment Occupancy (+1)
+    -- We automatically increment the visible simulation count
+    UPDATE buses 
+    SET sim_occupied = LEAST(COALESCE(sim_occupied, 0) + 1, capacity),
+        last_seen = NOW()
+    WHERE id = p_bus_id;
+
+    RETURN jsonb_build_object(
+        'status', 'success', 
+        'message', 'Welcome Aboard', 
+        'balance', v_card_record.balance,
+        'source', COALESCE(v_start_stop_name, 'GPS Location')
+    );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
 
 
 -- 3.2 HANDLE BUS EXIT
@@ -230,6 +280,7 @@ DECLARE
     v_trip_record RECORD;
     v_fare NUMERIC := 50; -- Base Fare
     v_new_balance NUMERIC;
+    v_end_stop_name TEXT;
 BEGIN
     SELECT * INTO v_card_record FROM cards WHERE id = p_card_uid OR card_number = p_card_uid LIMIT 1;
     
@@ -243,6 +294,9 @@ BEGIN
 
     SELECT * INTO v_trip_record FROM trips WHERE id = v_card_record.active_trip;
 
+    -- *** NEW: Resolve GPS to Stop Name ***
+    v_end_stop_name := resolve_stop_name(p_bus_id, p_lat, p_lon);
+
     -- Fixed Fare: ₹50
     v_fare := 50;
 
@@ -255,10 +309,11 @@ BEGIN
         last_seen = NOW() 
     WHERE id = v_card_record.id;
 
-    -- End Trip
+    -- End Trip with resolved stop name
     UPDATE trips 
     SET end_time = NOW(), 
         end_location = jsonb_build_object('lat', p_lat, 'lon', p_lon),
+        end_stop_name = v_end_stop_name,
         status = 'completed',
         fare = v_fare
     WHERE id = v_trip_record.id;
@@ -270,9 +325,23 @@ BEGIN
     -- Log
     INSERT INTO rfid_logs (bus_id, card_id, event_type) VALUES (p_bus_id, v_card_record.id, 'exit');
 
-    RETURN jsonb_build_object('status', 'success', 'message', 'Trip Completed', 'deducted', v_fare, 'balance', v_new_balance);
+    -- SYNC SIMULATION: Decrement Occupancy (-1)
+    UPDATE buses 
+    SET sim_occupied = GREATEST(COALESCE(sim_occupied, 0) - 1, 0),
+        last_seen = NOW()
+    WHERE id = p_bus_id;
+
+    RETURN jsonb_build_object(
+        'status', 'success', 
+        'message', 'Trip Completed', 
+        'deducted', v_fare, 
+        'balance', v_new_balance,
+        'destination', COALESCE(v_end_stop_name, 'GPS Location')
+    );
 END;
 $$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
 
 
 -- 3.3 HANDLE TELEMETRY
@@ -313,29 +382,18 @@ BEGIN
     SELECT capacity INTO v_capacity FROM buses WHERE id = p_bus_id;
     IF v_capacity IS NULL THEN v_capacity := 40; END IF;
 
-    -- SIMULATION MODE: If no real active trips, generate fake data for demo
-    -- PRIORITY 1: Use Manual Simulation Values from Admin Panel if set
-    -- PRIORITY 2: Use Constant fallback if inputs are empty/null (handled by defaults)
+    -- SIMULATION MODE: TRUST THE 'sim_occupied' COLUMN
+    -- This column is now the Single Source of Truth, updated by:
+    -- 1. Admin Panel (Manual Override)
+    -- 2. Hardware Scans (via handle_bus_entry/exit functions)
     
     SELECT sim_occupied, sim_leaving INTO v_occupied, v_leaving FROM buses WHERE id = p_bus_id;
 
-    -- If real trips exist, they override the manual occupancy (optional, but logical)
-    -- But user wants "constant", so let's check if real trips > 0 first.
-    DECLARE 
-        v_real_occupied INTEGER;
-    BEGIN
-        SELECT count(*) INTO v_real_occupied FROM trips WHERE bus_id = p_bus_id AND status = 'ongoing';
-        
-        IF v_real_occupied > 0 THEN
-             v_occupied := v_real_occupied;
-             -- For leaving, we still might want simulation as we can't know real future exits easily
-             -- so we keep v_leaving from the SELECT above (or default)
-        ELSE
-             -- Use the fetched sim values. If null, fallback to constants
-             IF v_occupied IS NULL THEN v_occupied := 28; END IF;
-             IF v_leaving IS NULL THEN v_leaving := 5; END IF;
-        END IF;
-    END;
+    IF v_occupied IS NULL THEN v_occupied := 28; END IF;
+    IF v_leaving IS NULL THEN v_leaving := 5; END IF;
+
+    -- REMOVED: The logic that overrode simulation if real trips > 0. 
+    -- We now want the simulation column to be the master.
     
     -- Calculate %
     v_percent := (v_occupied::FLOAT / v_capacity::FLOAT) * 100;
@@ -357,6 +415,9 @@ $$ LANGUAGE plpgsql SECURITY DEFINER;
 -- ==========================================
 
 -- Link 'admin@gmail.com' to Physical Card '596B7E05' (If User Exists)
+/* 
+-- NOTE: COMMENTED OUT TO PREVENT COPY-PASTE ERRORS. 
+-- UNCOMMENT IF YOU NEED TO RESET/LINK ADMIN CARD.
 DO $$
 DECLARE
     v_user_id UUID;
@@ -401,3 +462,4 @@ BEGIN
          RAISE NOTICE 'User % not found. Skipping auto-link.', v_email;
     END IF;
 END $$;
+*/

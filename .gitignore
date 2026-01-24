@@ -17,3 +17,12 @@ functions/node_modules/
 
 # Arduino
 arduino/**/build/
+
+# IEEE Reports (contains project details)
+IEEE_REPORT.tex
+IEEE_REPORT_DRAFT.md
+
+# Debug scripts with hardcoded credentials
+functions/debug_rfid_logs.js
+functions/verify_bus_data.js
+functions/debug_resolution.js

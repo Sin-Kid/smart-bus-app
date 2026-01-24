@@ -14,7 +14,7 @@ export default function RoutesPage() {
   const [showTimePicker, setShowTimePicker] = useState(false)
 
   const [routeForm, setRouteForm] = useState({ name: '', source: '', destination: '' })
-  const [stopForm, setStopForm] = useState({ name: '', route_id: '', targetOrder: null, arrival_time: '' })
+  const [stopForm, setStopForm] = useState({ name: '', route_id: '', targetOrder: null, arrival_time: '', price: '' })
 
   const [editingRoute, setEditingRoute] = useState(null)
   const [editingStop, setEditingStop] = useState(null)
@@ -71,7 +71,7 @@ export default function RoutesPage() {
 
   const fetchStops = async () => {
     const { data } = await supabase.from('bus_stops')
-      .select('id, name, lat, lon, order, route_id, bus_id, arrival_time')
+      .select('id, name, lat, lon, order, route_id, bus_id, arrival_time, price')
       .eq('bus_id', selectedBus)
       .order('order')
     setStops(data || [])
@@ -113,7 +113,7 @@ export default function RoutesPage() {
       if (editingStop) {
         // Update existing
         const { error } = await supabase.from('bus_stops')
-          .update({ name: stopForm.name, route_id: stopForm.route_id, arrival_time: stopForm.arrival_time })
+          .update({ name: stopForm.name, route_id: stopForm.route_id, arrival_time: stopForm.arrival_time, price: stopForm.price })
           .eq('id', editingStop.id)
         if (error) throw error
       } else {
@@ -137,7 +137,9 @@ export default function RoutesPage() {
             bus_id: selectedBus,
             route_id: stopForm.route_id,
             name: stopForm.name,
+
             arrival_time: stopForm.arrival_time,
+            price: stopForm.price,
             order: newOrder,
             lat: 0, lon: 0
           })
@@ -145,7 +147,7 @@ export default function RoutesPage() {
       }
       setShowStopForm(false)
       setEditingStop(null)
-      setStopForm({ name: '', route_id: '', targetOrder: null, arrival_time: '' })
+      setStopForm({ name: '', route_id: '', targetOrder: null, arrival_time: '', price: '' })
       fetchStops()
     } catch (error) {
       console.error(error)
@@ -322,7 +324,7 @@ export default function RoutesPage() {
                           setSelectedRoute(route.id);
                           setShowStopForm(true);
                           setEditingStop(null);
-                          setStopForm({ name: '', route_id: route.id, targetOrder: null, arrival_time: '' })
+                          setStopForm({ name: '', route_id: route.id, targetOrder: null, arrival_time: '', price: '' })
                         }}
                         style={{ background: 'white', border: '1px solid #cbd5e1', color: '#475569' }}
                       >
@@ -371,7 +373,7 @@ export default function RoutesPage() {
                             setShowStopForm(true)
                             setEditingStop(null)
                             // Insert at index 1 (between source and first stop)
-                            setStopForm({ name: '', route_id: route.id, targetOrder: 1, arrival_time: '' })
+                            setStopForm({ name: '', route_id: route.id, targetOrder: 1, arrival_time: '', price: '' })
                             setShowTimePicker(false)
                           }}
                           className="btn-small"
@@ -394,6 +396,11 @@ export default function RoutesPage() {
                                   🕒 {stop.arrival_time}
                                 </span>
                               )}
+                              {stop.price && (
+                                <span style={{ fontSize: '12px', color: '#059669', marginLeft: '8px', background: '#ecfdf5', padding: '2px 6px', borderRadius: '4px', border: '1px solid #a7f3d0' }}>
+                                  ₹{stop.price}
+                                </span>
+                              )}
                             </div>
                             <button className="btn-small" onClick={() => { setEditingStop(stop); setStopForm(stop); setShowStopForm(true); setShowTimePicker(false) }}>Edit</button>
                             <button className="btn-small btn-danger" onClick={() => handleDeleteStop(stop.id)}>Delete</button>
@@ -407,7 +414,7 @@ export default function RoutesPage() {
                                 setShowStopForm(true)
                                 setEditingStop(null)
                                 // Insert at next position
-                                setStopForm({ name: '', route_id: route.id, targetOrder: (stop.order || 0) + 1, arrival_time: '' })
+                                setStopForm({ name: '', route_id: route.id, targetOrder: (stop.order || 0) + 1, arrival_time: '', price: '' })
                                 setShowTimePicker(false)
                               }}
                               className="btn-small"
@@ -503,6 +510,16 @@ export default function RoutesPage() {
                       </div>
                     )}
                   </div>
+                </div>
+                <div className="form-group">
+                  <label style={{ display: 'block', marginBottom: '6px', fontSize: '13px', fontWeight: '500', color: '#64748b' }}>Price (₹)</label>
+                  <input
+                    type="number"
+                    placeholder="10"
+                    value={stopForm.price}
+                    onChange={e => setStopForm({ ...stopForm, price: e.target.value })}
+                    style={{ width: '100%', padding: '10px', borderRadius: '6px', border: '1px solid #cbd5e1' }}
+                  />
                 </div>
                 <div className="form-actions" style={{ marginTop: '8px', display: 'flex', gap: '10px', justifyContent: 'flex-end' }}>
                   <button type="button" className="btn-secondary" onClick={() => setShowStopForm(false)} style={{ padding: '10px 20px', borderRadius: '6px' }}>Cancel</button>

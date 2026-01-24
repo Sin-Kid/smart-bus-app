@@ -137,7 +137,46 @@ export default function BusListScreen({ navigation, route }) {
 
             if (scheduleError) throw scheduleError;
 
-            setSchedules(scheduleData || []);
+            // 6. Calculate Dynamic Fare for each schedule
+            const finalSchedules = await Promise.all((scheduleData || []).map(async (sched) => {
+                let totalCost = 0;
+
+                // Get all stops for this route (ordered)
+                const { data: routeStops } = await supabase
+                    .from('bus_stops')
+                    .select('name, price, order')
+                    .eq('route_id', sched.route.id)
+                    .order('order');
+
+                if (routeStops && routeStops.length > 0) {
+                    // Find indices of user's requested Source and Destination
+                    const searchSrc = source.toLowerCase();
+                    const searchDst = destination.toLowerCase();
+
+                    // We need to match loose names (e.g. "Kengeri" matches "Kengeri Bus Stand")
+                    const startIdx = routeStops.findIndex(s => s.name?.toLowerCase().includes(searchSrc));
+                    const endIdx = routeStops.findIndex(s => s.name?.toLowerCase().includes(searchDst));
+
+                    if (startIdx !== -1 && endIdx !== -1 && startIdx < endIdx) {
+                        // Sum prices from Start to End
+                        // Logic: If I travel from Stop 1 to Stop 3, I pay for Stop 1 (maybe?), Stop 2, Stop 3.
+                        // Consistent with Backend: Sum of prices of stops in range [lower, upper]
+                        for (let i = startIdx; i <= endIdx; i++) {
+                            const p = Number(routeStops[i].price);
+                            totalCost += (p > 0 ? p : 10);
+                        }
+                    } else {
+                        // Fallback if full stops logic fails (maybe source is Route Source, not in stops table?)
+                        totalCost = sched.fare || 50;
+                    }
+                } else {
+                    totalCost = sched.fare || 50;
+                }
+
+                return { ...sched, calculatedFare: totalCost };
+            }));
+
+            setSchedules(finalSchedules);
         } catch (error) {
             console.error('Error fetching schedules:', error);
         } finally {
@@ -191,7 +230,7 @@ export default function BusListScreen({ navigation, route }) {
 
                 <View style={styles.footer}>
                     <Text style={styles.durationText}>Calculated Duration</Text>
-                    <Text style={styles.fareText}>₹ 50</Text>
+                    <Text style={styles.fareText}>₹ {item.calculatedFare || 50}</Text>
                 </View>
             </TouchableOpacity>
         );

@@ -2,29 +2,21 @@ const { createClient } = require('@supabase/supabase-js');
 const express = require('express');
 const cors = require('cors');
 
-// Initialize Supabase client
+// Initialize Supabase
 const supabaseUrl = process.env.SUPABASE_URL;
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-
-if (!supabaseUrl || !supabaseServiceKey) {
-  console.error('Missing Supabase Config! Ensure SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY are set.');
-}
 const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-// GeoPoint is no longer used. We rely on standard JavaScript Date objects for timestamps.
 
 const app = express();
 app.use(cors({ origin: true }));
 app.use(express.json());
 
-// Device token: prefer env var
 const DEVICE_TOKEN = process.env.DEVICE_TOKEN;
-console.log('>>> FUNCTIONS STARTUP DEVICE_TOKEN =', DEVICE_TOKEN);
 
-// Basic Haversine distance (km)
+// Haversine distance (km)
 function haversineKm(lat1, lon1, lat2, lon2) {
   const toRad = (v) => (v * Math.PI) / 180;
-  const R = 6371; // km
+  const R = 6371;
   const dLat = toRad(lat2 - lat1);
   const dLon = toRad(lon2 - lon1);
   const a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
@@ -34,274 +26,133 @@ function haversineKm(lat1, lon1, lat2, lon2) {
   return R * c;
 }
 
-// Middleware: device auth
+// Auth Middleware
 app.use((req, res, next) => {
   const incoming = req.header('x-device-token') || '';
-  console.log('>>> INCOMING x-device-token header =', JSON.stringify(incoming));
-  if (!incoming || incoming !== DEVICE_TOKEN) {
-    console.log('>>> TOKEN MISMATCH: expected=', DEVICE_TOKEN, ' got=', incoming);
-    return res.status(401).json({ error: 'Unauthorized - invalid device token' });
-  }
+  if (incoming !== DEVICE_TOKEN) return res.status(401).json({ error: 'Unauthorized' });
   next();
 });
 
 /**
- * POST /device/telemetry
- * body: { busId, lat, lon, speed?, heading?, timestamp? }
- * Writes to: buses table (last_seen, location), and a log in telemetry table
+ * Resolve Stop Name
+ */
+const resolveStop = async (busId, lat, lon) => {
+  try {
+    const { data: bus } = await supabase.from('buses').select('*').eq('id', busId).single();
+
+    // 1. Simulation Check (Direct ID)
+    if (bus?.current_stop_id && !['source-node', 'dest-node'].includes(bus.current_stop_id)) {
+      const { data: s } = await supabase.from('bus_stops').select('*').eq('id', bus.current_stop_id).single();
+      if (s) return { stop: s, stopsList: [] };
+    }
+
+    // 2. Get Route Stops
+    const { data: sched } = await supabase.from('bus_schedules').select('route_id').eq('bus_id', busId).eq('status', 'active').limit(1);
+    let stops = [];
+    if (sched && sched.length > 0) {
+      const { data: rs } = await supabase.from('bus_stops').select('*').eq('route_id', sched[0].route_id).order('order');
+      if (rs) stops = rs;
+    }
+
+    // 3. Simulation Check (Name)
+    if (bus?.current_location_name) {
+      const match = stops.find(s => s.name === bus.current_location_name);
+      if (match) return { stop: match, stopsList: stops };
+    }
+
+    // 4. GPS Check
+    let cLat = lat || bus?.location?.lat;
+    let cLon = lon || bus?.location?.lon;
+    if (cLat && cLon && stops.length > 0) {
+      let minD = Infinity, closest = null;
+      stops.forEach(s => {
+        const d = haversineKm(cLat, cLon, s.lat, s.lon);
+        if (d < minD) { minD = d; closest = s; }
+      });
+      if (closest && minD < 0.5) return { stop: closest, stopsList: stops };
+    }
+
+    return { stop: bus?.current_location_name ? { name: bus.current_location_name } : null, stopsList: stops };
+  } catch (err) {
+    console.error('resolveStop error', err);
+    return null;
+  }
+};
+
+/**
+ * Telemetry: Updates bus location and backfills ongoing trips
  */
 app.post('/device/telemetry', async (req, res) => {
-  try {
-    console.log('>>> TELEMETRY REQ BODY =', JSON.stringify(req.body));
-    const { busId, lat, lon, speed, heading, timestamp } = req.body;
-    if (!busId || typeof lat !== 'number' || typeof lon !== 'number') {
-      return res.status(400).json({ error: 'Missing busId or lat/lon' });
-    }
+  const { busId, lat, lon, speed, heading } = req.body;
+  const ts = new Date().toISOString();
 
-    // Use standard Date objects for timestamps
-    const ts = timestamp ? new Date(timestamp) : new Date();
+  await supabase.from('buses').update({ last_seen: ts, location: { lat, lon }, speed, heading }).eq('id', busId);
+  await supabase.from('telemetry').insert({ bus_id: busId, location: { lat, lon }, speed, heading, timestamp: ts });
 
-    // Update bus record
-    const { error: busUpdateError } = await supabase
-      .from('buses')
-      .update({
-        last_seen: ts.toISOString(),
-        location: { lat, lon },
-        speed: (typeof speed === 'number') ? speed : null,
-        heading: heading || null,
-      })
-      .eq('id', busId);
-
-    if (busUpdateError) {
-      console.error('Error updating bus:', busUpdateError);
-      // If bus doesn't exist, create it
-      const { error: insertError } = await supabase
-        .from('buses')
-        .insert({
-          id: busId,
-          last_seen: ts.toISOString(),
-          location: { lat, lon },
-          speed: (typeof speed === 'number') ? speed : null,
-          heading: heading || null,
-        });
-      if (insertError) {
-        console.error('Error inserting bus:', insertError);
-        throw insertError;
-      }
-    }
-
-    // Add telemetry log
-    const { error: telemetryError } = await supabase
-      .from('telemetry')
-      .insert({
-        bus_id: busId,
-        location: { lat, lon },
-        speed: (typeof speed === 'number') ? speed : null,
-        heading: heading || null,
-        timestamp: ts.toISOString(),
-      });
-
-    if (telemetryError) {
-      console.error('Error inserting telemetry:', telemetryError);
-      throw telemetryError;
-    }
-
-    return res.json({ ok: true });
-  } catch (err) {
-    console.error('telemetry error', err && err.stack ? err.stack : err);
-    return res.status(500).json({ error: 'internal', details: err.message });
+  const ctx = await resolveStop(busId, lat, lon);
+  if (ctx?.stop?.name) {
+    await supabase.from('buses').update({ current_location_name: ctx.stop.name }).eq('id', busId);
+    // Backfill ongoing trips for this bus that are missing a start name
+    await supabase.from('trips').update({ start_stop_name: ctx.stop.name }).eq('bus_id', busId).eq('status', 'ongoing').is('start_stop_name', null);
   }
+  res.json({ ok: true });
 });
 
 /**
- * POST /device/rfid
- * body: { busId, cardId, eventType, lat?, lon?, timestamp? }
- * eventType: 'entry' | 'exit'
- * Basic logic:
- * - on entry: create a trip document (trips) with startTime/location/busId/cardId and mark user/card activeTrip
- * - on exit: find active trip for cardId, set endTime/endLocation, compute distance and fare, create transaction doc
+ * RFID: Entry / Exit
  */
 app.post('/device/rfid', async (req, res) => {
-  try {
-    const { busId, cardId, eventType, lat, lon, timestamp } = req.body;
-    if (!busId || !cardId || !eventType) {
-      return res.status(400).json({ error: 'Missing busId, cardId or eventType' });
-    }
-    // Use standard Date object
-    const ts = timestamp ? new Date(timestamp) : new Date();
+  const { busId, cardId, eventType, lat, lon } = req.body;
+  const ts = new Date().toISOString();
+  const ctx = await resolveStop(busId, lat, lon);
+  const stopName = ctx?.stop?.name || null;
 
-    if (eventType === 'entry') {
-      // create trip
-      const tripData = {
-        bus_id: busId,
-        card_id: cardId,
-        start_time: ts.toISOString(),
-        start_location: (typeof lat === 'number' && typeof lon === 'number')
-          ? { lat, lon }
-          : null,
-        end_time: null,
-        end_location: null,
-        fare: null,
-        status: 'ongoing',
-      };
-
-      const { data: trip, error: tripError } = await supabase
-        .from('trips')
-        .insert(tripData)
-        .select()
-        .single();
-
-      if (tripError) throw tripError;
-
-      // set card active_trip pointer
-      const { error: cardUpdateError } = await supabase
-        .from('cards')
-        .update({
-          active_trip: trip.id,
-          last_seen: ts.toISOString(),
-          updated_at: ts.toISOString(),
-        })
-        .eq('id', cardId);
-
-      if (cardUpdateError) {
-        console.error('Error updating card:', cardUpdateError);
-        // Card might not exist, create it
-        await supabase
-          .from('cards')
-          .insert({
-            id: cardId,
-            active_trip: trip.id,
-            last_seen: ts.toISOString(),
-            created_at: ts.toISOString(),
-            updated_at: ts.toISOString(),
-          });
-      }
-
-      // log event
-      await supabase
-        .from('rfid_logs')
-        .insert({
-          bus_id: busId,
-          card_id: cardId,
-          event_type: 'entry',
-          timestamp: ts.toISOString(),
-        });
-
-      return res.json({ ok: true, tripId: trip.id });
-    }
-
-    if (eventType === 'exit') {
-      // find active trip
-      const { data: trips, error: tripsError } = await supabase
-        .from('trips')
-        .select('*')
-        .eq('card_id', cardId)
-        .eq('status', 'ongoing')
-        .order('start_time', { ascending: false })
-        .limit(1);
-
-      if (tripsError) throw tripsError;
-
-      if (!trips || trips.length === 0) {
-        return res.status(404).json({ error: 'No ongoing trip found for card' });
-      }
-
-      const trip = trips[0];
-
-      const endLoc = (typeof lat === 'number' && typeof lon === 'number')
-        ? { lat, lon }
-        : null;
-
-      // compute distance if startLocation exists
-      let distanceKm = null;
-      if (trip.start_location && endLoc) {
-        // Access coordinates using .lat and .lon (plain object keys)
-        distanceKm = haversineKm(
-          trip.start_location.lat,
-          trip.start_location.lon,
-          endLoc.lat,
-          endLoc.lon
-        );
-      }
-
-      // Basic fare logic: base fare + per km
-      const baseFare = 10; // currency units
-      const perKm = 5; // currency units per km
-      let fare = null;
-      if (distanceKm !== null) {
-        // Round to 2 decimal places
-        fare = Math.max(baseFare, Math.round((baseFare + perKm * distanceKm) * 100) / 100);
-      } else {
-        fare = baseFare;
-      }
-
-      // update trip
-      const { error: updateError } = await supabase
-        .from('trips')
-        .update({
-          end_time: ts.toISOString(),
-          end_location: endLoc ? endLoc : null,
-          distance_km: distanceKm,
-          fare,
-          status: 'finished',
-        })
-        .eq('id', trip.id);
-
-      if (updateError) throw updateError;
-
-      // clear card active_trip
-      await supabase
-        .from('cards')
-        .update({
-          active_trip: null,
-          last_seen: ts.toISOString(),
-          updated_at: ts.toISOString(),
-        })
-        .eq('id', cardId);
-
-      // create transaction
-      const { error: txError } = await supabase
-        .from('transactions')
-        .insert({
-          card_id: cardId,
-          trip_id: trip.id,
-          amount: fare,
-          timestamp: ts.toISOString(),
-          bus_id: busId,
-          type: 'trip',
-        });
-
-      if (txError) throw txError;
-
-      // log rfid
-      await supabase
-        .from('rfid_logs')
-        .insert({
-          bus_id: busId,
-          card_id: cardId,
-          event_type: 'exit',
-          timestamp: ts.toISOString(),
-        });
-
-      return res.json({ ok: true, tripId: trip.id, fare });
-    }
-
-    return res.status(400).json({ error: 'invalid eventType' });
-  } catch (err) {
-    console.error('rfid error', err && err.stack ? err.stack : err);
-    return res.status(500).json({ error: 'internal', details: err.message });
+  if (eventType === 'entry') {
+    const { data: trip } = await supabase.from('trips').insert({
+      bus_id: busId, card_id: cardId, start_time: ts,
+      start_location: { lat, lon }, start_stop_name: stopName,
+      status: 'ongoing', fare: 0
+    }).select().single();
+    await supabase.from('cards').update({ active_trip: trip.id, last_seen: ts }).eq('id', cardId);
+    return res.json({ ok: true, tripId: trip.id, startStop: stopName });
   }
+
+  if (eventType === 'exit') {
+    const { data: trips } = await supabase.from('trips').select('*').eq('card_id', cardId).eq('status', 'ongoing').single();
+    if (!trips) return res.status(404).json({ error: 'No trip' });
+
+    let fare = 10;
+    if (ctx?.stopsList?.length > 0) {
+      const sIdx = ctx.stopsList.findIndex(s => s.name === trips.start_stop_name);
+      const eIdx = ctx.stopsList.findIndex(s => s.name === stopName);
+      if (sIdx !== -1 && eIdx !== -1) {
+        fare = 0;
+        const [low, high] = sIdx < eIdx ? [sIdx, eIdx] : [eIdx, sIdx];
+        for (let i = low; i <= high; i++) fare += (Number(ctx.stopsList[i].price) || 10);
+      }
+    }
+
+    // Final check for start_stop_name if it's still missing
+    let finalStartName = trips.start_stop_name;
+    if (!finalStartName && ctx && ctx.stop && ctx.stop.name) {
+      // If start is somehow still null (unlikely with telemetry backfill), use current as fallback or check bus loc again
+      // But for now, we just proceed. Telemetry should have caught it.
+    }
+
+    await supabase.from('trips').update({
+      end_time: ts,
+      end_location: { lat, lon },
+      end_stop_name: stopName,
+      fare,
+      status: 'finished'
+    }).eq('id', trips.id);
+    await supabase.from('cards').update({ active_trip: null, last_seen: ts }).eq('id', cardId);
+    await supabase.from('transactions').insert({ card_id: cardId, trip_id: trips.id, amount: fare, bus_id: busId, type: 'trip', timestamp: ts });
+    return res.json({ ok: true, fare, endStop: stopName });
+  }
+  res.status(400).json({ error: 'Invalid event' });
 });
 
-// default healthcheck
 app.get('/', (req, res) => res.send('SmartBus API OK'));
-
-// Export for use with serverless platforms or Express server
-const PORT = process.env.PORT || 3000;
-if (require.main === module) {
-  app.listen(PORT, () => {
-    console.log(`SmartBus API server running on port ${PORT}`);
-  });
-}
-
+app.listen(process.env.PORT || 3000, () => console.log('Server running'));
 module.exports = app;

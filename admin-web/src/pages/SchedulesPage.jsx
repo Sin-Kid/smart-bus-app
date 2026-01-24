@@ -1,6 +1,6 @@
-// src/pages/SchedulesPage.jsx
 import React, { useEffect, useState } from 'react'
 import { supabase } from '../supabaseConfig'
+import TimePicker from '../components/TimePicker'
 
 export default function SchedulesPage() {
   const [buses, setBuses] = useState([])
@@ -90,9 +90,21 @@ export default function SchedulesPage() {
               <option value="">Select Route</option>
               {routes.map(r => <option key={r.id} value={r.id}>{r.name}</option>)}
             </select>
-            <div style={{ display: 'flex', gap: 10 }}>
-              <input type="time" value={formData.departure_time} onChange={e => setFormData({ ...formData, departure_time: e.target.value })} required />
-              <input type="time" value={formData.arrival_time} onChange={e => setFormData({ ...formData, arrival_time: e.target.value })} required />
+            <div style={{ display: 'flex', gap: 20, marginBottom: 15 }}>
+              <div>
+                <label style={{ display: 'block', marginBottom: 5, fontSize: 12, color: '#666' }}>Departure Time</label>
+                <TimePicker
+                  value={formData.departure_time}
+                  onChange={(val) => setFormData({ ...formData, departure_time: val })}
+                />
+              </div>
+              <div>
+                <label style={{ display: 'block', marginBottom: 5, fontSize: 12, color: '#666' }}>Arrival Time</label>
+                <TimePicker
+                  value={formData.arrival_time}
+                  onChange={(val) => setFormData({ ...formData, arrival_time: val })}
+                />
+              </div>
             </div>
             <div style={{ display: 'flex', gap: 5, margin: '10px 0' }}>
               {days.map((d, i) => (
