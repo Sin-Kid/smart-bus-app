@@ -1,6 +1,6 @@
 # 🚌 Smart Bus System
 
-**Authors:** Pavan G (@Sin-Kid) & Nandan M Shekar (@nms-eng)
+**Authors:** Pavan G (@Sin-Kid) 
 
 A comprehensive IoT-enabled Smart Bus management system featuring **real-time tracking**, **RFID ticketing**, **ML-powered passenger demand prediction**, and **live analytics dashboard**.
 
