@@ -234,7 +234,7 @@ This project is documented in an IEEE-format research paper:
 
 This project is developed for academic and research purposes.
 
-**Authors:** Pavan G (@Sin-Kid) & Nandan M Shekar (@nms-eng)
+**Authors:** Pavan G (@Sin-Kid)
 
 ---
 
