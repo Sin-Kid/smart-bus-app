@@ -10,9 +10,9 @@
 
 INSERT INTO buses (id, name, location, speed, heading, status_message, capacity, sim_occupied, sim_leaving, current_location_name)
 VALUES 
-    ('BUS101', 'Bus 101', '{"lat": 12.9716, "lon": 77.5946}', 0, 0, 'On Time', 52, 36, 6, 'KSR Bengaluru'),
-    ('BUS102', 'Bus 102', '{"lat": 12.9716, "lon": 77.5946}', 0, 0, 'On Time', 52, 20, 4, 'Vijayanagar'),
-    ('BUS103', 'Bus 103', '{"lat": 12.9716, "lon": 77.5946}', 0, 0, 'On Time', 52, 42, 8, 'RR Nagar')
+    ('BUS101', 'Bus 101', '{"lat": 12.9716, "lon": 77.5946}', 0, 0, 'On Time', 67, 51, 6, 'KSR Bengaluru'),
+    ('BUS102', 'Bus 102', '{"lat": 12.9716, "lon": 77.5946}', 0, 0, 'On Time', 67, 35, 4, 'Vijayanagar'),
+    ('BUS103', 'Bus 103', '{"lat": 12.9716, "lon": 77.5946}', 0, 0, 'On Time', 67, 57, 8, 'RR Nagar')
 ON CONFLICT (id) DO UPDATE SET
     name = EXCLUDED.name,
     capacity = EXCLUDED.capacity,

@@ -306,7 +306,13 @@ The smart bus hardware uses a NodeMCU ESP8266 board acting as a main controller.
 | | VCC | **3.3V / 5V** | VCC Power Input |
 | | GND | **GND** | Shared Ground |
 
-### 🔄 Firmware Control Loop & Logic (code1.ino)
+### 🔄 Firmware Control Loop & Logic
+
+The firmware folder contains two alternative versions depending on your hardware assembly:
+1. **Single RFID Reader with GPS** (`smart_bus_single_rfid_gps`): Best for single reader setups where the system automatically toggles entry/exit based on the active trip status.
+2. **Dual RFID Reader without GPS** (`smart_bus_dual_rfid_no_gps`): Best for setups with distinct Entry and Exit gates, utilizing two MFRC522 readers.
+
+Key control loop features include:
 - **SPI Bus Multiplexing**: Because both RFID reader modules share the SPI lines (`D5`, `D6`, `D7`), the NodeMCU selects which reader it is communicating with by pulling its corresponding Slave Select pin (`D2` or `D8`) low.
 - **GPS Frame Parsing**: The firmware continuously reads incoming serial bytes from the GPS module in `loop()` and pipes them to the `TinyGPSPlus` parser. Valid location fixes update internal latitude/longitude coordinates.
 - **5-Second Software Tap Debouncing**: To prevent passengers from triggering double charges if their card lingers near the RF field, the system implements a software timer:
@@ -399,8 +405,10 @@ smart-bus-supabase/
 │   └── node_modules/
 │
 ├── arduino/                        # NodeMCU Microcontroller Firmware
-│   ├── code1/
-│   │   └── code1.ino               # Main C++ Arduino program
+│   ├── smart_bus_single_rfid_gps/  # Firmware for Single RFID + GPS configuration
+│   │   └── smart_bus_single_rfid_gps.ino
+│   ├── smart_bus_dual_rfid_no_gps/ # Firmware for Dual RFID configuration (no GPS)
+│   │   └── smart_bus_dual_rfid_no_gps.ino
 │   └── hardware_block_diagram.png  # Visual breadboard diagram for pin wiring
 │
 ├── schema.sql                      # Complete Database Setup Script
@@ -513,8 +521,8 @@ npx expo start
    - `MFRC522` by GithubCommunity
    - `TinyGPSPlus` by Mikal Hart
    - `ArduinoJson` by Benoit Blanchon
-4. Open the file `arduino/code1/code1.ino`.
-5. Edit the configuration settings in `code1.ino` (lines 41-45) with your parameters:
+4. Open either `arduino/smart_bus_single_rfid_gps/smart_bus_single_rfid_gps.ino` or `arduino/smart_bus_dual_rfid_no_gps/smart_bus_dual_rfid_no_gps.ino` depending on your hardware assembly.
+5. Edit the configuration settings in the `.ino` file with your parameters:
    - `WIFI_SSID`
    - `WIFI_PASS`
    - `SUPABASE_URL` (Without `https://` prefix, e.g., `xyz.supabase.co`)

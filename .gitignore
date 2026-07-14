@@ -26,3 +26,12 @@ IEEE_REPORT_DRAFT.md
 functions/debug_rfid_logs.js
 functions/verify_bus_data.js
 functions/debug_resolution.js
+
+# Python / ML prediction artifacts
+functions/ml_prediction/__pycache__/
+functions/ml_prediction/models/
+functions/ml_prediction/models_backup_*/
+functions/ml_prediction/*.pkl
+functions/ml_prediction/*.csv
+functions/ml_prediction/*.png
+
