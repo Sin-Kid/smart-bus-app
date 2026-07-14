@@ -11,6 +11,7 @@ import {
     Legend,
     Filler
 } from 'chart.js';
+import { generateSimulatedMLPrediction, generateSimulatedMLMetrics } from '../utils/simulatedData';
 
 // Register Chart.js components
 ChartJS.register(
@@ -29,6 +30,7 @@ export default function MLPredictionPanel({ busId, currentStopId, currentOccupan
     const [loading, setLoading] = useState(false);
     const [error, setError] = useState(null);
     const [metrics, setMetrics] = useState(null);
+    const [usingSimulatedData, setUsingSimulatedData] = useState(false);
 
     // Fetch ML prediction
     const fetchPrediction = async () => {
@@ -46,7 +48,7 @@ export default function MLPredictionPanel({ busId, currentStopId, currentOccupan
             const dayOfWeek = new Date().getDay();
             const isPeakHour = [7, 8, 9, 17, 18, 19].includes(hour);
 
-            const response = await fetch('http://localhost:5001/predict', {
+            const response = await fetch('https://localhost:5001/predict', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
@@ -64,9 +66,15 @@ export default function MLPredictionPanel({ busId, currentStopId, currentOccupan
 
             const data = await response.json();
             setPrediction(data.prediction);
+            setUsingSimulatedData(false);
         } catch (err) {
-            console.error('ML Prediction error:', err);
-            setError('ML API unavailable');
+            console.log('ML API unavailable, using simulated data');
+            // Fallback to simulated data
+            const hour = new Date().getHours();
+            const simData = generateSimulatedMLPrediction(currentStopId, hour, currentOccupancy);
+            setPrediction(simData.prediction);
+            setUsingSimulatedData(true);
+            setError(null); // Don't show error, just use simulated data
         } finally {
             setLoading(false);
         }
@@ -75,13 +83,20 @@ export default function MLPredictionPanel({ busId, currentStopId, currentOccupan
     // Fetch model metrics
     const fetchMetrics = async () => {
         try {
-            const response = await fetch('http://localhost:5001/metrics');
+            const response = await fetch('https://localhost:5001/metrics');
             if (response.ok) {
                 const data = await response.json();
                 setMetrics(data.metrics);
+                setUsingSimulatedData(false);
+            } else {
+                throw new Error('Metrics API unavailable');
             }
         } catch (err) {
-            console.error('Metrics fetch error:', err);
+            console.log('Metrics API unavailable, using simulated metrics');
+            // Fallback to simulated metrics
+            const simMetrics = generateSimulatedMLMetrics();
+            setMetrics(simMetrics.metrics);
+            setUsingSimulatedData(true);
         }
     };
 
@@ -130,7 +145,22 @@ export default function MLPredictionPanel({ busId, currentStopId, currentOccupan
                 alignItems: 'center',
                 justifyContent: 'space-between'
             }}>
-                <span>AI Passenger Demand Prediction</span>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    🤖 AI Passenger Demand Prediction
+                    {usingSimulatedData && (
+                        <span style={{
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            background: '#fff3cd',
+                            color: '#856404',
+                            border: '1px solid #ffc107'
+                        }}>
+                            DEMO MODE
+                        </span>
+                    )}
+                </span>
                 {metrics && (
                     <span style={{ fontSize: '11px', fontWeight: '500', color: '#1565c0' }}>
                         Model Accuracy: {(metrics.boarding.r2 * 100).toFixed(1)}%

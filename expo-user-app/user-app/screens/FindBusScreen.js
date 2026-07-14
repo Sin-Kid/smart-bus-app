@@ -9,7 +9,7 @@ import {
   StatusBar,
   SafeAreaView,
   FlatList,
-  Modal
+  ScrollView,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { supabase } from '../supabaseConfig';
@@ -18,6 +18,7 @@ export default function FindBusScreen({ navigation }) {
   const [source, setSource] = useState('');
   const [destination, setDestination] = useState('');
   const [allStops, setAllStops] = useState([]);
+  const [busesLive, setBusesLive] = useState([]);
 
   // Autocomplete State
   const [showDropdown, setShowDropdown] = useState(null); // 'source' or 'destination' or null
@@ -25,7 +26,22 @@ export default function FindBusScreen({ navigation }) {
 
   useEffect(() => {
     fetchStops();
+    fetchLiveBuses();
+
+    const sub = supabase
+      .channel('find_buses_live')
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'buses' }, fetchLiveBuses)
+      .subscribe();
+    return () => sub.unsubscribe();
   }, []);
+
+  const fetchLiveBuses = async () => {
+    const { data } = await supabase
+      .from('buses')
+      .select('id, name, sim_occupied, capacity, sim_leaving, current_location_name, status_message')
+      .order('name');
+    setBusesLive(data || []);
+  };
 
   const fetchStops = async () => {
     try {
@@ -113,111 +129,148 @@ export default function FindBusScreen({ navigation }) {
         <Text style={styles.headerTitle}>Where is My Bus</Text>
       </View>
 
-      {/* Main Content */}
-      <View style={styles.content}>
+      <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
+        {/* Main Content */}
+        <View style={styles.content}>
 
-        {/* Search Card */}
-        <View style={styles.searchCard}>
+          {/* Search Card */}
+          <View style={styles.searchCard}>
 
-          {/* Source Input */}
-          <View style={styles.inputContainer}>
-            <View style={styles.connectorLine}>
-              <View style={styles.dotCircle} />
-              <View style={styles.verticalLine} />
-              <View style={styles.dotCircle} />
-            </View>
-
-            <View style={styles.inputsWrapper}>
-              {/* Source Input Row */}
-              <View style={[styles.inputRow, { zIndex: showDropdown === 'source' ? 2000 : 1 }]}>
-                <Text style={styles.inputLabel}>From</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter Source Station"
-                  value={source}
-                  onChangeText={(t) => handleInputChange(t, 'source')}
-                  onFocus={() => {
-                    setFilteredStops(allStops);
-                    setShowDropdown('source');
-                  }}
-                />
-                {showDropdown === 'source' && (
-                  <View style={styles.dropdown}>
-                    <FlatList
-                      data={filteredStops}
-                      keyboardShouldPersistTaps='handled'
-                      keyExtractor={(item, index) => index.toString()}
-                      renderItem={({ item }) => (
-                        <TouchableOpacity style={styles.dropdownItem} onPress={() => selectStop(item)}>
-                          <Text>{item}</Text>
-                        </TouchableOpacity>
-                      )}
-                      style={{ maxHeight: 200 }}
-                      nestedScrollEnabled={true}
-                    />
-                  </View>
-                )}
+            {/* Source Input */}
+            <View style={styles.inputContainer}>
+              <View style={styles.connectorLine}>
+                <View style={styles.dotCircle} />
+                <View style={styles.verticalLine} />
+                <View style={styles.dotCircle} />
               </View>
 
-              <View style={styles.divider} />
+              <View style={styles.inputsWrapper}>
+                {/* Source Input Row */}
+                <View style={[styles.inputRow, { zIndex: showDropdown === 'source' ? 2000 : 1 }]}>
+                  <Text style={styles.inputLabel}>From</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Enter Source Station"
+                    value={source}
+                    onChangeText={(t) => handleInputChange(t, 'source')}
+                    onFocus={() => {
+                      setFilteredStops(allStops);
+                      setShowDropdown('source');
+                    }}
+                  />
+                  {showDropdown === 'source' && (
+                    <View style={styles.dropdown}>
+                      <FlatList
+                        data={filteredStops}
+                        keyboardShouldPersistTaps='handled'
+                        keyExtractor={(item, index) => index.toString()}
+                        renderItem={({ item }) => (
+                          <TouchableOpacity style={styles.dropdownItem} onPress={() => selectStop(item)}>
+                            <Text>{item}</Text>
+                          </TouchableOpacity>
+                        )}
+                        style={{ maxHeight: 200 }}
+                        nestedScrollEnabled={true}
+                      />
+                    </View>
+                  )}
+                </View>
 
-              {/* Destination Input Row */}
-              <View style={[styles.inputRow, { zIndex: showDropdown === 'destination' ? 2000 : 1 }]}>
-                <Text style={styles.inputLabel}>To</Text>
-                <TextInput
-                  style={styles.input}
-                  placeholder="Enter Destination Station"
-                  value={destination}
-                  onChangeText={(t) => handleInputChange(t, 'destination')}
-                  onFocus={() => {
-                    setFilteredStops(allStops);
-                    setShowDropdown('destination');
-                  }}
-                />
-                {showDropdown === 'destination' && (
-                  <View style={styles.dropdown}>
-                    <FlatList
-                      data={filteredStops}
-                      keyboardShouldPersistTaps='handled'
-                      keyExtractor={(item, index) => index.toString()}
-                      renderItem={({ item }) => (
-                        <TouchableOpacity style={styles.dropdownItem} onPress={() => selectStop(item)}>
-                          <Text>{item}</Text>
-                        </TouchableOpacity>
-                      )}
-                      style={{ maxHeight: 200 }}
-                      nestedScrollEnabled={true}
-                    />
-                  </View>
-                )}
+                <View style={styles.divider} />
+
+                {/* Destination Input Row */}
+                <View style={[styles.inputRow, { zIndex: showDropdown === 'destination' ? 2000 : 1 }]}>
+                  <Text style={styles.inputLabel}>To</Text>
+                  <TextInput
+                    style={styles.input}
+                    placeholder="Enter Destination Station"
+                    value={destination}
+                    onChangeText={(t) => handleInputChange(t, 'destination')}
+                    onFocus={() => {
+                      setFilteredStops(allStops);
+                      setShowDropdown('destination');
+                    }}
+                  />
+                  {showDropdown === 'destination' && (
+                    <View style={styles.dropdown}>
+                      <FlatList
+                        data={filteredStops}
+                        keyboardShouldPersistTaps='handled'
+                        keyExtractor={(item, index) => index.toString()}
+                        renderItem={({ item }) => (
+                          <TouchableOpacity style={styles.dropdownItem} onPress={() => selectStop(item)}>
+                            <Text>{item}</Text>
+                          </TouchableOpacity>
+                        )}
+                        style={{ maxHeight: 200 }}
+                        nestedScrollEnabled={true}
+                      />
+                    </View>
+                  )}
+                </View>
               </View>
+
+              {/* Swap Button */}
+              <TouchableOpacity style={styles.swapButton} onPress={handleSwap} activeOpacity={0.8}>
+                <Ionicons name="swap-vertical" size={24} color="#2f6bb1" />
+              </TouchableOpacity>
             </View>
 
-            {/* Swap Button */}
-            <TouchableOpacity style={styles.swapButton} onPress={handleSwap} activeOpacity={0.8}>
-              <Ionicons name="swap-vertical" size={24} color="#2f6bb1" />
+            {/* Find Button */}
+            <TouchableOpacity style={styles.findButton} onPress={handleSearch} activeOpacity={0.9}>
+              <Text style={styles.findButtonText}>Find buses</Text>
             </TouchableOpacity>
+
           </View>
 
-          {/* Find Button */}
-          <TouchableOpacity style={styles.findButton} onPress={handleSearch} activeOpacity={0.9}>
-            <Text style={styles.findButtonText}>Find buses</Text>
-          </TouchableOpacity>
+          {/* ── Live Fleet Occupancy ─────────────────────────── */}
+          {busesLive.length > 0 && (
+            <View style={styles.fleetSection}>
+              <Text style={styles.fleetTitle}>🚌 Live Fleet Occupancy</Text>
+              {busesLive.map((bus) => {
+                const pct = bus.capacity > 0 ? Math.round((bus.sim_occupied / bus.capacity) * 100) : 0;
+                const isHigh   = pct >= 85;
+                const isMid    = pct >= 60 && pct < 85;
+                const barColor = isHigh ? '#ef4444' : isMid ? '#f59e0b' : '#10b981';
+                const bgColor  = isHigh ? '#fee2e2' : isMid ? '#fef3c7' : '#dcfce7';
+                const label    = isHigh ? 'Packed' : isMid ? 'Moderate' : 'Spacious';
+                const txtColor = isHigh ? '#991b1b' : isMid ? '#92400e' : '#065f46';
+
+                return (
+                  <View key={bus.id} style={styles.busCard}>
+                    <View style={styles.busCardLeft}>
+                      <Text style={styles.busCardName}>{bus.name}</Text>
+                      {bus.current_location_name ? (
+                        <Text style={styles.busCardLoc}>📍 {bus.current_location_name}</Text>
+                      ) : null}
+                      {/* Progress bar */}
+                      <View style={styles.busOccBar}>
+                        <View style={[styles.busOccFill, { width: `${pct}%`, backgroundColor: barColor }]} />
+                      </View>
+                      <Text style={styles.busOccDetail}>
+                        {bus.sim_occupied}/{bus.capacity} pax · ~{bus.sim_leaving} leaving next stop
+                      </Text>
+                    </View>
+                    <View style={[styles.occPill, { backgroundColor: bgColor }]}>
+                      <Text style={[styles.occPillText, { color: txtColor }]}>{label}</Text>
+                      <Text style={[styles.occPillPct, { color: txtColor }]}>{pct}%</Text>
+                    </View>
+                  </View>
+                );
+              })}
+            </View>
+          )}
+
+          {/* Click outside to close dropdown */}
+          {showDropdown && (
+            <TouchableOpacity
+              style={StyleSheet.absoluteFill}
+              onPress={() => setShowDropdown(null)}
+            />
+          )}
 
         </View>
-
-        {/* Optional: Recent Searches or Other Options can go here */}
-
-        {/* Click outside to close dropdown (simple overlay) */}
-        {showDropdown && (
-          <TouchableOpacity
-            style={StyleSheet.absoluteFill}
-            onPress={() => setShowDropdown(null)}
-            zIndex={-1}
-          />
-        )}
-
-      </View>
+      </ScrollView>
     </SafeAreaView>
   );
 }
@@ -361,5 +414,52 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
+  // ── Fleet Occupancy Section ───────────────────────────────────────
+  fleetSection: {
+    marginTop: 16,
+    backgroundColor: 'white',
+    borderRadius: 12,
+    padding: 14,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 3,
+  },
+  fleetTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#1e3a5f',
+    marginBottom: 12,
+  },
+  busCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    gap: 10,
+  },
+  busCardLeft: { flex: 1 },
+  busCardName: { fontSize: 13, fontWeight: '700', color: '#111827', marginBottom: 2 },
+  busCardLoc: { fontSize: 11, color: '#6b7280', marginBottom: 5 },
+  busOccBar: {
+    height: 5,
+    backgroundColor: '#f1f5f9',
+    borderRadius: 3,
+    overflow: 'hidden',
+    marginBottom: 3,
+  },
+  busOccFill: { height: '100%', borderRadius: 3 },
+  busOccDetail: { fontSize: 10, color: '#9ca3af' },
+  occPill: {
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    alignItems: 'center',
+    minWidth: 70,
+  },
+  occPillText: { fontSize: 11, fontWeight: '700' },
+  occPillPct: { fontSize: 13, fontWeight: '800', marginTop: 1 },
 });
 

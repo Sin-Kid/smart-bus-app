@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS buses (
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS status_message TEXT DEFAULT 'On Time';
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS current_stop_id UUID; -- FK reference added later if needed
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS current_location_name TEXT;
-ALTER TABLE buses ADD COLUMN IF NOT EXISTS capacity INTEGER DEFAULT 40;
+ALTER TABLE buses ADD COLUMN IF NOT EXISTS capacity INTEGER DEFAULT 52;
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS sim_occupied INTEGER DEFAULT 28;
 ALTER TABLE buses ADD COLUMN IF NOT EXISTS sim_leaving INTEGER DEFAULT 5;
 
@@ -380,7 +380,7 @@ DECLARE
 BEGIN
     -- Get Capacity
     SELECT capacity INTO v_capacity FROM buses WHERE id = p_bus_id;
-    IF v_capacity IS NULL THEN v_capacity := 40; END IF;
+    IF v_capacity IS NULL THEN v_capacity := 52; END IF;
 
     -- SIMULATION MODE: TRUST THE 'sim_occupied' COLUMN
     -- This column is now the Single Source of Truth, updated by:
@@ -389,7 +389,7 @@ BEGIN
     
     SELECT sim_occupied, sim_leaving INTO v_occupied, v_leaving FROM buses WHERE id = p_bus_id;
 
-    IF v_occupied IS NULL THEN v_occupied := 28; END IF;
+    IF v_occupied IS NULL THEN v_occupied := 36; END IF;
     IF v_leaving IS NULL THEN v_leaving := 5; END IF;
 
     -- REMOVED: The logic that overrode simulation if real trips > 0. 

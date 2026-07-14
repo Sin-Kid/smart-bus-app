@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Bar } from 'react-chartjs-2';
 import { supabase } from '../supabaseConfig';
+import { generateSimulatedRFIDLogs } from '../utils/simulatedData';
 import {
     Chart as ChartJS,
     CategoryScale,
@@ -26,6 +27,7 @@ export default function PassengerFrequencyChart({ busId }) {
     const [timeInterval, setTimeInterval] = useState('hourly');
     const [loading, setLoading] = useState(true);
     const [totalScans, setTotalScans] = useState(0);
+    const [usingSimulatedData, setUsingSimulatedData] = useState(false);
 
     useEffect(() => {
         if (busId) {
@@ -52,13 +54,19 @@ export default function PassengerFrequencyChart({ busId }) {
             }
 
             if (!logs || logs.length === 0) {
-                setChartData(null);
-                setTotalScans(0);
+                // Use simulated data when no real data exists
+                console.log('No RFID logs found, using simulated data');
+                const simLogs = generateSimulatedRFIDLogs(busId);
+                setTotalScans(simLogs.length);
+                const processed = processRealData(simLogs, timeInterval);
+                setChartData(processed);
+                setUsingSimulatedData(true);
                 setLoading(false);
                 return;
             }
 
             setTotalScans(logs.length);
+            setUsingSimulatedData(false);
 
             // Process real data into chart format
             const processed = processRealData(logs, timeInterval);
@@ -229,9 +237,25 @@ export default function PassengerFrequencyChart({ busId }) {
                     margin: 0,
                     fontSize: '15px',
                     fontWeight: '700',
-                    color: '#333'
+                    color: '#333',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
                 }}>
-                    Passenger Flow Analysis {totalScans > 0 && `(${totalScans} scans)`}
+                    📊 Passenger Flow Analysis {totalScans > 0 && `(${totalScans} scans)`}
+                    {usingSimulatedData && (
+                        <span style={{
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            background: '#fff3cd',
+                            color: '#856404',
+                            border: '1px solid #ffc107'
+                        }}>
+                            DEMO MODE
+                        </span>
+                    )}
                 </h4>
 
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -292,14 +316,14 @@ export default function PassengerFrequencyChart({ busId }) {
             <div style={{
                 marginTop: '16px',
                 padding: '12px',
-                background: '#e8f5e9',
+                background: usingSimulatedData ? '#fff3cd' : '#e8f5e9',
                 borderRadius: '4px',
                 fontSize: '11px',
-                color: '#2e7d32',
-                border: '1px solid #a5d6a7'
+                color: usingSimulatedData ? '#856404' : '#2e7d32',
+                border: `1px solid ${usingSimulatedData ? '#ffc107' : '#a5d6a7'}`
             }}>
-                <strong>Data Source:</strong> Real RFID scan logs from Supabase database.
-                {chartData && ` Showing ${timeInterval} passenger frequency patterns from actual scans.`}
+                <strong>Data Source:</strong> {usingSimulatedData ? 'Simulated RFID data (demo mode)' : 'Real RFID scan logs from Supabase database'}.
+                {chartData && ` Showing ${timeInterval} passenger frequency patterns${usingSimulatedData ? ' (sample data)' : ' from actual scans'}.`}
             </div>
         </div>
     );

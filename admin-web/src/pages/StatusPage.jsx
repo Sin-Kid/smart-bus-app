@@ -4,6 +4,8 @@ import { supabase } from '../supabaseConfig'
 import MLPredictionPanel from '../components/MLPredictionPanel'
 import PassengerFrequencyChart from '../components/PassengerFrequencyChart'
 import RoutePassengerChart from '../components/RoutePassengerChart'
+import BusSeatMap from '../components/BusSeatMap'
+import RouteTimeline from '../components/RouteTimeline'
 
 
 export default function StatusPage() {
@@ -53,6 +55,48 @@ export default function StatusPage() {
   // RFID Simulation State
   const [rfidCardId, setRfidCardId] = useState('596B7E05')
   const [rfidProcessing, setRfidProcessing] = useState(false)
+  // Bulk capacity fix
+  const [fixingCapacity, setFixingCapacity] = useState(false)
+  const [fixResult, setFixResult] = useState(null)
+
+  const handleBulkFixCapacity = async () => {
+    setFixingCapacity(true)
+    setFixResult(null)
+    try {
+      // Update ALL buses to capacity = 67 (52 seats + 15 standing)
+      const { error, count } = await supabase
+        .from('buses')
+        .update({ capacity: 67 })
+        .gte('id', '')          // matches all rows
+        .select('id', { count: 'exact' })
+
+      if (error) throw error
+
+      // Also cap sim_occupied so it doesn't exceed 67
+      await supabase.rpc
+        ? null
+        : null // no-op placeholder
+
+      const { data: overcrowded } = await supabase
+        .from('buses')
+        .select('id, sim_occupied')
+        .gt('sim_occupied', 67)
+
+      if (overcrowded && overcrowded.length > 0) {
+        for (const b of overcrowded) {
+          await supabase.from('buses').update({ sim_occupied: 67 }).eq('id', b.id)
+        }
+      }
+
+      setFixResult({ success: true, message: `✅ All buses updated to 67 total capacity!` })
+      fetchBuses()
+      if (selectedBusId) fetchBusRoute(selectedBusId)
+    } catch (err) {
+      setFixResult({ success: false, message: `❌ Error: ${err.message}` })
+    } finally {
+      setFixingCapacity(false)
+    }
+  }
 
   const fetchBusRoute = async (busId) => {
     if (!busId) {
@@ -275,12 +319,132 @@ export default function StatusPage() {
     }
   }
 
+  const handleQuickBoard = async () => {
+    if (!selectedBusId) {
+      alert('Please select a bus first')
+      return
+    }
+    setRfidProcessing(true)
+    try {
+      const nextOccupied = Math.min(67, simOccupied + 1)
+      const { error } = await supabase
+        .from('buses')
+        .update({
+          sim_occupied: nextOccupied,
+          updated_at: new Date()
+        })
+        .eq('id', selectedBusId)
+
+      if (error) throw error
+      setSimOccupied(nextOccupied)
+      fetchBusRoute(selectedBusId)
+    } catch (err) {
+      console.error(err)
+      alert('Error updating passenger count: ' + err.message)
+    } finally {
+      setRfidProcessing(false)
+    }
+  }
+
+  const handleQuickExit = async () => {
+    if (!selectedBusId) {
+      alert('Please select a bus first')
+      return
+    }
+    setRfidProcessing(true)
+    try {
+      const nextOccupied = Math.max(0, simOccupied - 1)
+      const { error } = await supabase
+        .from('buses')
+        .update({
+          sim_occupied: nextOccupied,
+          updated_at: new Date()
+        })
+        .eq('id', selectedBusId)
+
+      if (error) throw error
+      setSimOccupied(nextOccupied)
+      fetchBusRoute(selectedBusId)
+    } catch (err) {
+      console.error(err)
+      alert('Error updating passenger count: ' + err.message)
+    } finally {
+      setRfidProcessing(false)
+    }
+  }
+
   return (
     <div className="page-container">
       <div className="page-header">
         <h2>Live Status & Simulation</h2>
         <p className="page-subtitle">Manage fleet location and occupancy simulation</p>
       </div>
+
+      {/* ── Bulk Capacity Fix Banner ─────────────────────────────────────── */}
+      {buses.some(b => b.capacity !== 67) && !fixResult?.success && (
+        <div style={{
+          background: 'linear-gradient(135deg, #7c3aed 0%, #4f46e5 100%)',
+          borderRadius: 12,
+          padding: '14px 20px',
+          marginBottom: 20,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          flexWrap: 'wrap',
+          gap: 12,
+          boxShadow: '0 4px 14px rgba(79,70,229,0.35)',
+        }}>
+          <div style={{ color: 'white' }}>
+            <div style={{ fontWeight: 700, fontSize: 15 }}>
+              ⚠️ Some buses don't have 67 capacity (52 Seats + 15 Standing)
+            </div>
+            <div style={{ fontSize: 12, opacity: 0.85, marginTop: 3 }}>
+              {buses.filter(b => b.capacity !== 67).map(b => `${b.name} (${b.capacity} cap)`).join(' · ')}
+            </div>
+          </div>
+          <button
+            onClick={handleBulkFixCapacity}
+            disabled={fixingCapacity}
+            style={{
+              background: 'white',
+              color: '#4f46e5',
+              border: 'none',
+              borderRadius: 8,
+              padding: '10px 20px',
+              fontWeight: 700,
+              fontSize: 14,
+              cursor: fixingCapacity ? 'not-allowed' : 'pointer',
+              opacity: fixingCapacity ? 0.7 : 1,
+              whiteSpace: 'nowrap',
+              boxShadow: '0 2px 8px rgba(0,0,0,0.15)',
+            }}
+          >
+            {fixingCapacity ? '⏳ Updating...' : '🔧 Set All Buses → 67 Cap'}
+          </button>
+        </div>
+      )}
+
+      {/* Fix result toast */}
+      {fixResult && (
+        <div style={{
+          padding: '12px 20px',
+          borderRadius: 10,
+          marginBottom: 16,
+          background: fixResult.success ? '#dcfce7' : '#fee2e2',
+          color: fixResult.success ? '#065f46' : '#991b1b',
+          fontWeight: 600,
+          fontSize: 14,
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}>
+          <span>{fixResult.message}</span>
+          <button
+            onClick={() => setFixResult(null)}
+            style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: 16 }}
+          >✕</button>
+        </div>
+      )}
 
       {/* Simulation Control Card */}
       {/* Simulation Control Card */}
@@ -370,45 +534,80 @@ export default function StatusPage() {
                 </div>
 
                 {/* Occupancy Grid */}
-                <div style={{
-                  display: 'grid',
-                  gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                  gap: '15px',
-                  background: '#eff6ff',
-                  padding: '20px',
-                  borderRadius: '8px',
-                  border: '1px solid #dbeafe'
-                }}>
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label style={{ fontSize: '13px', color: '#1e40af' }}>Occupied Seats</label>
-                    <input
-                      type="number"
-                      value={simOccupied}
-                      onChange={(e) => setSimOccupied(parseInt(e.target.value))}
-                      style={{ borderColor: '#bfdbfe' }}
-                    />
-                  </div>
+                {(() => {
+                  const derivedStanding = Math.min(Math.max(0, simOccupied - 52), 15)
+                  const derivedSeated   = Math.min(simOccupied, 52)
+                  return (
+                    <div>
+                      <div style={{
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
+                        gap: '15px',
+                        background: '#eff6ff',
+                        padding: '20px',
+                        borderRadius: '8px 8px 0 0',
+                        border: '1px solid #dbeafe',
+                        borderBottom: 'none',
+                      }}>
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label style={{ fontSize: '13px', color: '#1e40af' }}>Total Passengers (Tickets)</label>
+                          <input
+                            type="number"
+                            value={simOccupied}
+                            min={0}
+                            max={67}
+                            onChange={(e) => setSimOccupied(Math.min(67, Math.max(0, parseInt(e.target.value) || 0)))}
+                            style={{ borderColor: '#bfdbfe' }}
+                          />
+                        </div>
 
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label style={{ fontSize: '13px', color: '#1e40af' }}>Total Capacity</label>
-                    <input
-                      type="number"
-                      value={totalSeats}
-                      onChange={(e) => setTotalSeats(parseInt(e.target.value))}
-                      style={{ borderColor: '#bfdbfe' }}
-                    />
-                  </div>
+                        <div className="form-group" style={{ marginBottom: 0 }}>
+                          <label style={{ fontSize: '13px', color: '#1e40af' }}>Prediction (Leaving)</label>
+                          <input
+                            type="number"
+                            value={simLeaving}
+                            onChange={(e) => setSimLeaving(parseInt(e.target.value))}
+                            style={{ borderColor: '#bfdbfe' }}
+                          />
+                        </div>
+                      </div>
 
-                  <div className="form-group" style={{ marginBottom: 0 }}>
-                    <label style={{ fontSize: '13px', color: '#1e40af' }}>Prediction (Leaving)</label>
-                    <input
-                      type="number"
-                      value={simLeaving}
-                      onChange={(e) => setSimLeaving(parseInt(e.target.value))}
-                      style={{ borderColor: '#bfdbfe' }}
-                    />
-                  </div>
-                </div>
+                      {/* Derived standing info strip */}
+                      <div style={{
+                        background: derivedStanding > 0 ? (derivedStanding >= 15 ? '#fee2e2' : '#f5f3ff') : '#f0fdf4',
+                        border: '1px solid',
+                        borderColor: derivedStanding >= 15 ? '#fca5a5' : derivedStanding > 0 ? '#ddd6fe' : '#bbf7d0',
+                        borderRadius: '0 0 8px 8px',
+                        padding: '10px 20px',
+                        display: 'flex', gap: 20, flexWrap: 'wrap', alignItems: 'center',
+                      }}>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontSize: 11, color: '#6b7280' }}>💺 Seated</span>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: derivedSeated >= 52 ? '#ef4444' : '#1e3a5f' }}>
+                            {derivedSeated} <span style={{ fontSize: 11, fontWeight: 500, color: '#9ca3af' }}>/ 52</span>
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontSize: 11, color: '#6b7280' }}>🧍 Standing (Aisle)</span>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: derivedStanding >= 15 ? '#ef4444' : derivedStanding > 8 ? '#d97706' : '#7c3aed' }}>
+                            {derivedStanding} <span style={{ fontSize: 11, fontWeight: 500, color: '#9ca3af' }}>/ 15</span>
+                          </span>
+                        </div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                          <span style={{ fontSize: 11, color: '#6b7280' }}>🚌 Total Capacity</span>
+                          <span style={{ fontSize: 18, fontWeight: 800, color: '#374151' }}>
+                            67 <span style={{ fontSize: 11, fontWeight: 500, color: '#9ca3af' }}>(52+15)</span>
+                          </span>
+                        </div>
+                        {derivedStanding >= 15 && (
+                          <span style={{ fontSize: 11, fontWeight: 700, color: '#dc2626', padding: '3px 10px', borderRadius: 8, background: '#fee2e2', border: '1px solid #fca5a5' }}>
+                            ⚠️ Aisle full — no boarding!
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  )
+                })()}
 
                 {/* Primary Action */}
                 <button
@@ -514,6 +713,46 @@ export default function StatusPage() {
                     </button>
                   </div>
 
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginTop: '10px' }}>
+                    <button
+                      onClick={handleQuickBoard}
+                      disabled={rfidProcessing}
+                      style={{
+                        padding: '10px',
+                        fontSize: '13px',
+                        fontWeight: '600',
+                        borderRadius: '6px',
+                        backgroundColor: rfidProcessing ? '#d1d5db' : '#047857',
+                        color: 'white',
+                        border: 'none',
+                        cursor: rfidProcessing ? 'not-allowed' : 'pointer',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {rfidProcessing ? '⏳...' : '➕ Board (No RFID)'}
+                    </button>
+
+                    <button
+                      onClick={handleQuickExit}
+                      disabled={rfidProcessing}
+                      style={{
+                        padding: '10px',
+                        fontSize: '13px',
+                        fontWeight: '600',
+                        borderRadius: '6px',
+                        backgroundColor: rfidProcessing ? '#d1d5db' : '#b91c1c',
+                        color: 'white',
+                        border: 'none',
+                        cursor: rfidProcessing ? 'not-allowed' : 'pointer',
+                        boxShadow: '0 2px 4px rgba(0,0,0,0.1)',
+                        transition: 'all 0.2s'
+                      }}
+                    >
+                      {rfidProcessing ? '⏳...' : '➖ Exit (No RFID)'}
+                    </button>
+                  </div>
+
                   <p style={{
                     fontSize: '11px',
                     color: '#78350f',
@@ -524,6 +763,51 @@ export default function StatusPage() {
                     💡 <strong>Tip:</strong> Set bus location first, then simulate RFID scans. The source/destination will be automatically resolved from GPS coordinates.
                   </p>
                 </div>
+
+                {/* ===== DIGITAL TWIN: Seat Map + Route Timeline ===== */}
+                <div style={{
+                  marginTop: 24,
+                  padding: '20px',
+                  background: 'linear-gradient(135deg, #f0f9ff 0%, #e0f2fe 100%)',
+                  borderRadius: 12,
+                  border: '1px solid #bae6fd',
+                }}
+                >
+                  <h4 style={{
+                    margin: '0 0 16px',
+                    fontSize: 16,
+                    fontWeight: 700,
+                    color: '#0c4a6e',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                  }}>
+                    🖥️ Digital Twin — Live Bus Simulation
+                  </h4>
+                  <div style={{
+                    display: 'grid',
+                    gridTemplateColumns: 'repeat(auto-fit, minmax(320px, 1fr))',
+                    gap: 16,
+                  }}>
+                    <BusSeatMap
+                      capacity={67}
+                      occupied={simOccupied}
+                      leaving={simLeaving}
+                      busName={currentBusStatus?.name || selectedBusId}
+                    />
+                    <RouteTimeline
+                      stops={currentRouteStops}
+                      source={currentRouteInfo?.source}
+                      destination={currentRouteInfo?.destination}
+                      currentStop={currentBusStatus?.current_location_name}
+                      currentOccupancy={simOccupied}
+                      capacity={totalSeats}
+                      leavingCount={simLeaving}
+                      speed={currentBusStatus?.speed || 0}
+                    />
+                  </div>
+                </div>
+                {/* ===== END DIGITAL TWIN ===== */}
 
                 {/* ML Prediction Panel */}
                 <MLPredictionPanel

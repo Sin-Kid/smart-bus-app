@@ -179,7 +179,7 @@ export default function BusRouteScreen({ navigation, route }) {
                         {isBusHere && occupancy && (
                             <View style={styles.inlineOccupancy}>
                                 <Text style={styles.occBadgeText}>
-                                    {occupancy.occupied}/{occupancy.capacity} Seats ({occupancy.percent}%)
+                                    {occupancy.occupied}/{occupancy.capacity} Pax ({occupancy.percent}%)
                                 </Text>
                                 <Text style={styles.occSubText}>
                                     Prediction: ~{occupancy.leaving_next_stop} leaving
@@ -238,6 +238,20 @@ export default function BusRouteScreen({ navigation, route }) {
                         <View style={styles.timelineContainer}>
                             {stops.map(renderStop)}
                         </View>
+
+                        {/* ── View Seat Map Button ──────────────────────── */}
+                        <TouchableOpacity
+                          style={styles.seatMapButton}
+                          onPress={() => navigation.navigate('BusOccupancy', {
+                            busId: schedule?.bus_id || busId,
+                            busName: schedule?.bus?.name || busId,
+                            routeId: schedule?.route_id,
+                          })}
+                          activeOpacity={0.85}
+                        >
+                          <Ionicons name="grid" size={20} color="white" style={{ marginRight: 8 }} />
+                          <Text style={styles.seatMapButtonText}>🚌 View Live Seat Map & Digital Twin</Text>
+                        </TouchableOpacity>
                     </>
                 )}
             </ScrollView>
@@ -473,5 +487,26 @@ const styles = StyleSheet.create({
         fontSize: 10,
         color: '#6B7280',
         fontStyle: 'italic'
-    }
+    },
+    seatMapButton: {
+        margin: 16,
+        marginTop: 8,
+        backgroundColor: '#1e3a5f',
+        borderRadius: 12,
+        paddingVertical: 14,
+        paddingHorizontal: 20,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        shadowColor: '#1e3a5f',
+        shadowOpacity: 0.3,
+        shadowRadius: 8,
+        shadowOffset: { width: 0, height: 4 },
+        elevation: 5,
+    },
+    seatMapButtonText: {
+        color: 'white',
+        fontSize: 15,
+        fontWeight: '700',
+    },
 });

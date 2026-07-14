@@ -117,11 +117,12 @@ def feature_importance():
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    print(f"\n[API] ML Prediction API running on port {port}")
+    print(f"\n[API] ML Prediction API running over HTTPS on port {port}")
     print(f"[ENDPOINTS] Available endpoints:")
     print(f"   POST /predict - Make predictions")
     print(f"   GET  /metrics - Model performance")
     print(f"   GET  /feature-importance - Feature analysis")
     print(f"   GET  /health - Health check")
     
-    app.run(host='0.0.0.0', port=port, debug=True)
+    # Running over HTTPS with ad-hoc SSL certificates (requires pyOpenSSL)
+    app.run(host='0.0.0.0', port=port, debug=True, ssl_context='adhoc')

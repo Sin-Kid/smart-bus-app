@@ -1,10 +1,10 @@
 /*
-   SMART BUS - FIRMWARE V3 (Debounce Fix)
+   SMART BUS - FIRMWARE V4 (Single RFID & Debounce Fix)
    Board: ESP8266 (NodeMCU / WeMos D1 Mini)
    
    ================ WIRING GUIDE ================
    
-   1. RFID READER 1 (ENTRY) - RC522
+   1. RFID READER (SINGLE) - RC522
       - SDA (SS)  -> D2 (GPIO 4)
       - RST       -> D1 (GPIO 5)
       - SCK       -> D5 (GPIO 14)
@@ -13,12 +13,7 @@
       - GND       -> GND
       - 3.3V      -> 3.3V
 
-   2. RFID READER 2 (EXIT) - RC522
-      - SDA (SS)  -> D8 (GPIO 15)
-      - RST       -> D0 (GPIO 16)
-      - SCK, MOSI, MISO, GND, 3.3V -> Shared with Reader 1
-
-   3. GPS MODULE (NEO-6M)
+   2. GPS MODULE (NEO-6M)
       - TX        -> D4 (GPIO 2) [SoftwareSerial RX]
       - RX        -> D3 (GPIO 0) [SoftwareSerial TX]
       - VCC       -> 3.3V or 5V (Check module spec)
@@ -38,41 +33,33 @@
 
 // ================= CONFIGURATION =================
 // Replace with your Credentials
-const char* WIFI_SSID = "YOUR_WIFI_SSID";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+const char* WIFI_SSID = "Pavan";
+const char* WIFI_PASS = "12345678";
 
-const char* SUPABASE_URL = "YOUR_SUPABASE_URL_WITHOUT_HTTPS"; 
-const char* SUPABASE_KEY = "YOUR_SUPABASE_ANON_KEY"; 
+const char* SUPABASE_URL = "ogtatxspaxahbeykkovk.supabase.co"; 
+const char* SUPABASE_KEY = "sb_publishable_pqk_0KjvK4sVPUG-5BS-_w_TZ_Drjzh"; 
 
 const char* BUS_ID = "BUS101"; // Unique ID for this bus
 
 // ================= PINS =================
-// GPS Pins (Sortware Serial)
+// GPS Pins (Software Serial)
 #define GPS_RX D4
 #define GPS_TX D3
 
-// Entry RFID Pins
-#define SS_ENTRY D2
-#define RST_ENTRY D1
-
-// Exit RFID Pins
-#define SS_EXIT D8
-#define RST_EXIT D0
+// RFID Pins (Single Reader)
+#define SS_PIN D2
+#define RST_PIN D1
 
 // ================= OBJECTS =================
 SoftwareSerial gpsSerial(GPS_RX, GPS_TX);
 TinyGPSPlus gpsParser;
-MFRC522 rfidEntry(SS_ENTRY, RST_ENTRY);
-MFRC522 rfidExit(SS_EXIT, RST_EXIT);
+MFRC522 rfid(SS_PIN, RST_PIN);
 
 bool gpsFix = false;
 
 // ================= DEBOUNCE VARS =================
-String lastUidEntry = "";
-unsigned long lastTimeEntry = 0;
-
-String lastUidExit = "";
-unsigned long lastTimeExit = 0;
+String lastUid = "";
+unsigned long lastTime = 0;
 
 const int DEBOUNCE_DELAY = 5000; // 5 Seconds ignore same card
 
@@ -124,7 +111,12 @@ void callSupabaseRPC(String funcName, String jsonPayload) {
   WiFiClientSecure client;
   client.setInsecure();
 
+  // Reduce SSL buffer sizes to fit inside the ESP8266's limited RAM
+  client.setBufferSizes(2048, 1024);
+  client.setTimeout(4000); 
+
   HTTPClient http;
+  http.setTimeout(4000);
   
   String url = "https://" + String(SUPABASE_URL) + "/rest/v1/rpc/" + funcName;
   
@@ -147,16 +139,16 @@ void callSupabaseRPC(String funcName, String jsonPayload) {
   }
 }
 
-void handleEntry(String uid) {
+void handleTap(String uid) {
   // Check Debounce
-  if (uid == lastUidEntry && (millis() - lastTimeEntry < DEBOUNCE_DELAY)) {
-    Serial.println("Ignored Duplicate Entry Tap: " + uid);
+  if (uid == lastUid && (millis() - lastTime < DEBOUNCE_DELAY)) {
+    Serial.println("Ignored Duplicate Tap (5s timeout): " + uid);
     return;
   }
   
-  Serial.println("PROCESSING ENTRY: " + uid);
-  lastUidEntry = uid;
-  lastTimeEntry = millis();
+  Serial.println("PROCESSING RFID TAP: " + uid);
+  lastUid = uid;
+  lastTime = millis();
   
   String json = "{";
   json += "\"p_card_uid\":\"" + uid + "\",";
@@ -165,28 +157,7 @@ void handleEntry(String uid) {
   json += "\"p_lon\":" + String(getLon(), 6);
   json += "}";
   
-  callSupabaseRPC("handle_bus_entry", json);
-}
-
-void handleExit(String uid) {
-  // Check Debounce
-  if (uid == lastUidExit && (millis() - lastTimeExit < DEBOUNCE_DELAY)) {
-    Serial.println("Ignored Duplicate Exit Tap: " + uid);
-    return;
-  }
-  
-  Serial.println("PROCESSING EXIT: " + uid);
-  lastUidExit = uid;
-  lastTimeExit = millis();
-  
-  String json = "{";
-  json += "\"p_card_uid\":\"" + uid + "\",";
-  json += "\"p_bus_id\":\"" + String(BUS_ID) + "\",";
-  json += "\"p_lat\":" + String(getLat(), 6) + ",";
-  json += "\"p_lon\":" + String(getLon(), 6);
-  json += "}";
-  
-  callSupabaseRPC("handle_bus_exit", json);
+  callSupabaseRPC("handle_rfid_tap", json);
 }
 
 void sendTelemetry() {
@@ -200,48 +171,67 @@ void sendTelemetry() {
   callSupabaseRPC("handle_telemetry", json);
 }
 
+// Helper to verify MFRC522 communication over SPI
+bool checkRFIDConnection(MFRC522 &reader, const char *name) {
+  byte v = reader.PCD_ReadRegister(MFRC522::VersionReg);
+  Serial.print("RFID ");
+  Serial.print(name);
+  Serial.print(" (Version Reg: 0x");
+  Serial.print(v, HEX);
+  Serial.print(")");
+
+  if (v == 0x00 || v == 0xFF) {
+    Serial.println(" -> CONNECTION FAILED! Check wiring / power.");
+    return false;
+  } else {
+    Serial.println(" -> CONNECTED & OK.");
+    return true;
+  }
+}
+
 // ================= MAIN =================
 
 void setup() {
   Serial.begin(115200);
   
+  // Configure Slave Select (CS) pin as OUTPUT and deselect it (HIGH)
+  pinMode(SS_PIN, OUTPUT);
+  digitalWrite(SS_PIN, HIGH);
+
+  // Configure Reset pin as OUTPUT and release reset (HIGH)
+  pinMode(RST_PIN, OUTPUT);
+  digitalWrite(RST_PIN, HIGH);
+
   // Init Hardware
   SPI.begin();
-  rfidEntry.PCD_Init();
-  rfidExit.PCD_Init();
+  
+  Serial.println("\nInitializing RFID Reader...");
+  rfid.PCD_Init();
+  checkRFIDConnection(rfid, "SingleReader");
+  
   gpsSerial.begin(9600);
   
-  Serial.println("\n\n--- SMART BUS SYSTEM STARTING (V3) ---");
+  Serial.println("\n\n--- SMART BUS SYSTEM STARTING (V4 - Single RFID) ---");
   
   connectWiFi();
   
   Serial.println("System Ready. Waiting for Cards...");
 }
 
-unsigned long lastTel = 0;
-
 void loop() {
   readGPS();
   
-  // 1. Check Entry Reader
-  if (rfidEntry.PICC_IsNewCardPresent() && rfidEntry.PICC_ReadCardSerial()) {
-    String uid = uidToString(&rfidEntry.uid);
-    handleEntry(uid);
+  // 1. Check RFID Reader
+  if (rfid.PICC_IsNewCardPresent() && rfid.PICC_ReadCardSerial()) {
+    String uid = uidToString(&rfid.uid);
+    handleTap(uid);
     
-    rfidEntry.PICC_HaltA();
-    rfidEntry.PCD_StopCrypto1();
+    rfid.PICC_HaltA();
+    rfid.PCD_StopCrypto1();
   }
   
-  // 2. Check Exit Reader
-  if (rfidExit.PICC_IsNewCardPresent() && rfidExit.PICC_ReadCardSerial()) {
-    String uid = uidToString(&rfidExit.uid);
-    handleExit(uid);
-    
-    rfidExit.PICC_HaltA();
-    rfidExit.PCD_StopCrypto1();
-  }
-  
-  // 3. Telemetry (Every 10 Seconds)
+  // 2. Telemetry (Every 10 Seconds)
+  static unsigned long lastTel = 0;
   if (millis() - lastTel > 10000) {
     sendTelemetry();
     lastTel = millis();

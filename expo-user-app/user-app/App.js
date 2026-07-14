@@ -17,6 +17,8 @@ import QRCodeScreen from './screens/QRCodeScreen';
 import TopUpScreen from './screens/TopUpScreen';
 import PaymentDummyScreen from './screens/PaymentDummyScreen';
 import CardHistoryScreen from './screens/CardHistoryScreen';
+import BusOccupancyScreen from './screens/BusOccupancyScreen';
+import ChatbotScreen from './screens/ChatbotScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -45,6 +47,7 @@ function MainTabs({ route }) {
           if (route.name === 'My Trips') iconName = focused ? 'receipt' : 'receipt-outline';
           if (route.name === 'QR Code') iconName = focused ? 'qr-code' : 'qr-code-outline';
           if (route.name === 'Card Info') iconName = focused ? 'card' : 'card-outline';
+          if (route.name === 'Ask AI') iconName = focused ? 'chatbubbles' : 'chatbubbles-outline';
           return <Ionicons name={iconName} size={size} color={color} />;
         },
       })}
@@ -58,6 +61,9 @@ function MainTabs({ route }) {
       </Tab.Screen>
       <Tab.Screen name="Card Info">
         {(props) => <CardInfoScreen {...props} cardId={userId} />}
+      </Tab.Screen>
+      <Tab.Screen name="Ask AI">
+        {(props) => <ChatbotScreen {...props} cardId={userId} />}
       </Tab.Screen>
     </Tab.Navigator>
   );
@@ -165,6 +171,11 @@ export default function App() {
                   headerStyle: { backgroundColor: 'white' },
                   headerTintColor: 'black'
                 }}
+              />
+              <Stack.Screen
+                name="BusOccupancy"
+                component={BusOccupancyScreen}
+                options={{ headerShown: false }}
               />
             </>
           )}

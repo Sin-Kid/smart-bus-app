@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Bar } from 'react-chartjs-2';
 import { supabase } from '../supabaseConfig';
+import { generateSimulatedTrips } from '../utils/simulatedData';
 import {
     Chart as ChartJS,
     CategoryScale,
@@ -24,6 +25,7 @@ export default function RoutePassengerChart() {
     const [chartData, setChartData] = useState(null);
     const [loading, setLoading] = useState(true);
     const [timeRange, setTimeRange] = useState('today'); // 'today', 'week', 'month'
+    const [usingSimulatedData, setUsingSimulatedData] = useState(false);
 
     useEffect(() => {
         fetchRouteData();
@@ -59,51 +61,67 @@ export default function RoutePassengerChart() {
             if (error) throw error;
 
             if (!trips || trips.length === 0) {
-                setChartData(null);
+                // Use simulated data when no real data exists
+                console.log('No trip data found, using simulated data');
+                const simTrips = generateSimulatedTrips(timeRange);
+                const processed = processTrips(simTrips);
+                setChartData(processed);
+                setUsingSimulatedData(true);
                 setLoading(false);
                 return;
             }
 
-            // Group by route
-            const routeCounts = {};
-            trips.forEach(trip => {
-                const routeName = trip.buses?.routes?.name || 'Unknown Route';
-                routeCounts[routeName] = (routeCounts[routeName] || 0) + 1;
-            });
-
-            // Sort by passenger count (descending)
-            const sortedRoutes = Object.entries(routeCounts)
-                .sort((a, b) => b[1] - a[1]);
-
-            const labels = sortedRoutes.map(([name]) => name);
-            const data = sortedRoutes.map(([, count]) => count);
-
-            // Color bars based on passenger volume (green=high, yellow=medium, red=low)
-            const maxCount = Math.max(...data);
-            const colors = data.map(count => {
-                const ratio = count / maxCount;
-                if (ratio > 0.7) return 'rgba(76, 175, 80, 0.8)'; // Green - high traffic
-                if (ratio > 0.4) return 'rgba(255, 193, 7, 0.8)'; // Yellow - medium traffic
-                return 'rgba(244, 67, 54, 0.8)'; // Red - low traffic
-            });
-
-            setChartData({
-                labels,
-                datasets: [{
-                    label: 'Number of Passengers',
-                    data,
-                    backgroundColor: colors,
-                    borderColor: colors.map(c => c.replace('0.8', '1')),
-                    borderWidth: 1
-                }]
-            });
+            const processed = processTrips(trips);
+            setChartData(processed);
+            setUsingSimulatedData(false);
 
         } catch (err) {
             console.error('Error fetching route data:', err);
-            setChartData(null);
+            // Fallback to simulated data on error
+            const simTrips = generateSimulatedTrips(timeRange);
+            const processed = processTrips(simTrips);
+            setChartData(processed);
+            setUsingSimulatedData(true);
         }
 
         setLoading(false);
+    };
+
+    const processTrips = (trips) => {
+
+        // Group by route
+        const routeCounts = {};
+        trips.forEach(trip => {
+            const routeName = trip.buses?.routes?.name || 'Unknown Route';
+            routeCounts[routeName] = (routeCounts[routeName] || 0) + 1;
+        });
+
+        // Sort by passenger count (descending)
+        const sortedRoutes = Object.entries(routeCounts)
+            .sort((a, b) => b[1] - a[1]);
+
+        const labels = sortedRoutes.map(([name]) => name);
+        const data = sortedRoutes.map(([, count]) => count);
+
+        // Color bars based on passenger volume (green=high, yellow=medium, red=low)
+        const maxCount = Math.max(...data);
+        const colors = data.map(count => {
+            const ratio = count / maxCount;
+            if (ratio > 0.7) return 'rgba(76, 175, 80, 0.8)'; // Green - high traffic
+            if (ratio > 0.4) return 'rgba(255, 193, 7, 0.8)'; // Yellow - medium traffic
+            return 'rgba(244, 67, 54, 0.8)'; // Red - low traffic
+        });
+
+        return {
+            labels,
+            datasets: [{
+                label: 'Number of Passengers',
+                data,
+                backgroundColor: colors,
+                borderColor: colors.map(c => c.replace('0.8', '1')),
+                borderWidth: 1
+            }]
+        };
     };
 
     const options = {
@@ -184,9 +202,25 @@ export default function RoutePassengerChart() {
                     margin: 0,
                     fontSize: '15px',
                     fontWeight: '700',
-                    color: '#333'
+                    color: '#333',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '8px'
                 }}>
-                    Route Demand Analysis
+                    📋 Route Demand Analysis
+                    {usingSimulatedData && (
+                        <span style={{
+                            fontSize: '10px',
+                            fontWeight: '600',
+                            padding: '2px 8px',
+                            borderRadius: '12px',
+                            background: '#fff3cd',
+                            color: '#856404',
+                            border: '1px solid #ffc107'
+                        }}>
+                            DEMO MODE
+                        </span>
+                    )}
                 </h4>
 
                 <div style={{ display: 'flex', gap: '8px' }}>
@@ -276,13 +310,13 @@ export default function RoutePassengerChart() {
             <div style={{
                 marginTop: '16px',
                 padding: '12px',
-                background: '#e3f2fd',
+                background: usingSimulatedData ? '#fff3cd' : '#e3f2fd',
                 borderRadius: '4px',
                 fontSize: '11px',
-                color: '#1565c0',
-                border: '1px solid #90caf9'
+                color: usingSimulatedData ? '#856404' : '#1565c0',
+                border: `1px solid ${usingSimulatedData ? '#ffc107' : '#90caf9'}`
             }}>
-                <strong>Management Insight:</strong> Routes with higher passenger counts should have more buses deployed.
+                <strong>Management Insight:</strong> {usingSimulatedData ? 'Using sample data for demonstration. ' : ''}Routes with higher passenger counts should have more buses deployed.
                 Routes with lower counts can operate with fewer buses to optimize fleet utilization.
             </div>
         </div>
