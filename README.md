@@ -1,3 +1,11 @@
+<p align="center">
+  <a href="https://drive.google.com/drive/folders/1-6QwSIBd1sO_FEfgYHaz-M9BqnWz_YpU">
+    <img src="smart-bus-QR.png" alt="Smart Bus demo video – scan or click to watch" width="250" />
+  </a>
+</p>
+
+<p align="center"><a href="https://drive.google.com/drive/folders/1-6QwSIBd1sO_FEfgYHaz-M9BqnWz_YpU">▶️ Watch the demo video</a></p>
+
 # 🚍 Smart Bus System
 
 **Authors:** Pavan G (@Sin-Kid) 
